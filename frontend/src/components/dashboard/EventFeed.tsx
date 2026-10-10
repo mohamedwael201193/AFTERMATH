@@ -73,7 +73,8 @@ export function EventFeed({
       )}
       <ul className="grid grid-cols-1 gap-3">
         {shown.map((e) => {
-          const catalog = instrumentCatalog.find((i) => i.symbol === e.instrumentSymbol);
+          const symbol = (e.instrumentSymbol || "").replace(/USDT$/i, "");
+          const catalog = instrumentCatalog.find((i) => i.symbol === symbol || i.symbol === e.instrumentSymbol);
           const selected = selectedId === e.id;
           return (
             <li key={e.id}>
@@ -89,11 +90,11 @@ export function EventFeed({
               >
                 {/* line 1 — identity + verdict */}
                 <div className="flex items-start gap-3">
-                  {catalog ? (
-                    <TickerIcon symbol={catalog.symbol} kind={catalog.kind} size={38} />
+                  {e.instrumentSymbol ? (
+                    <TickerIcon symbol={e.instrumentSymbol} kind={catalog?.kind ?? "EQUITY_TOKEN"} size={38} className="shrink-0" />
                   ) : (
-                    <span className="inline-flex h-[38px] w-[38px] items-center justify-center rounded-xl border-2 border-ink bg-paper text-[10px] font-bold text-ink-soft">
-                      {e.id.replace("EV-", "")}
+                    <span className="inline-flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-xl border-2 border-ink bg-paper text-[10px] font-bold text-ink-soft">
+                      EV
                     </span>
                   )}
                   <p
