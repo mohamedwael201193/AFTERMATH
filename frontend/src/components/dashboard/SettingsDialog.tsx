@@ -135,14 +135,14 @@ export function SettingsDialog() {
               <div>
                 <p className="text-sm font-bold text-ink">API connection</p>
                 <p className="mt-0.5 text-xs leading-relaxed text-ink-soft">
-                  Not connected — the deterministic preview provider is active.
-                  When the real backend lands, it implements the same provider
-                  interface and the switch happens here.
+                  This dashboard reads the production ledger through the same-origin
+                  reader. It does not use the illustrative preview dataset. The
+                  hourly paper cycle is not a continuous connection.
                 </p>
               </div>
             </div>
-            <span className="rounded-full border-2 border-line-strong bg-warmwhite px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-ink-soft">
-              Preview
+            <span className="rounded-full border-2 border-ink bg-forest-mist px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-forest-deep">
+              Production
             </span>
           </div>
         </div>

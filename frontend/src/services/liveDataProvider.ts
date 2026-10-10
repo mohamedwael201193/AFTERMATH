@@ -277,17 +277,17 @@ export const liveDataProvider = {
       eventId,
       state: "NO ACTION",
       confidence: 0,
-      plainLanguage: `Latest paper cycle: ${reason}. This symbol row is a stored observation, not its own decision. The model was not asked to authorize a trade.`,
+      plainLanguage: `Latest paper cycle: ${reason}. This symbol row is a stored observation, not its own decision. The model and the governor were not called.`,
       modelCalled: false,
-      reasoning: [reason],
+      reasoning: ["MODEL NOT CALLED — PRE-MODEL REFUSAL", reason],
       invalidationConditions: ["A verified event tied to this instrument would be required before a proposal."],
       proposedAction: null,
     };
     const risk: RiskEngineResult = {
       eventId,
       outcome: "REFUSED",
-      plainLanguage: reason,
-      checks: [{ id: "event", label: "Qualifying event", status: "FAIL", detail: reason, limit: "event required", observed: "none" }],
+      plainLanguage: "The governor was not called for this observation.",
+      checks: [],
       sizeMultiplier: null,
     };
     const execution: PaperExecution = {
@@ -307,8 +307,8 @@ export const liveDataProvider = {
     const receipt: SignedReceipt = {
       eventId,
       digestPreview: "none",
-      algorithm: "ed25519",
-      timestampAuthority: "not attached to this observation",
+      algorithm: "none",
+      timestampAuthority: "not attached",
       createdAt: event.occurredAt,
       verification: "UNAVAILABLE",
       fieldsIncluded: [],
@@ -322,7 +322,7 @@ export const liveDataProvider = {
       risk,
       execution,
       receipt,
-      priceSeries: observation ? { symbol: observation.symbol, points: [{ t: observation.observedAt, p: observation.priceUsd, event: true }], markers: [] } : null,
+      priceSeries: null,
     };
   },
 

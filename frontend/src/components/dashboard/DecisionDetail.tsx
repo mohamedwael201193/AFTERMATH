@@ -138,7 +138,7 @@ export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
       {/* ── 3 · the decision ───────────────────────────────── */}
       <section className="grid grid-cols-1 gap-3">
         <SectionTitle icon={BrainCircuit} step="03">
-          {decision.modelCalled === false ? "Cycle refusal — model not called" : "What did the AI decide?"}
+          {decision.modelCalled === false ? "MODEL NOT CALLED — PRE-MODEL REFUSAL" : "What did the AI decide?"}
         </SectionTitle>
         <div className="overflow-hidden rounded-3xl border-2 border-ink bg-warmwhite shadow-[0_4px_0_rgba(23,25,22,0.85)]">
           <div className="flex flex-wrap items-center gap-4 border-b-2 border-line bg-paper px-5 py-4">
@@ -218,8 +218,9 @@ export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
         <SectionTitle icon={AlertTriangle} step="04">What could go wrong?</SectionTitle>
         {concerns.length === 0 ? (
           <p className="rounded-3xl border-2 border-forest bg-forest-mist px-5 py-4 text-sm leading-relaxed text-forest-deep">
-            No open concerns recorded: every evidence record is confirmed and fresh,
-            and all risk observations sit inside their limits.
+            {decision.modelCalled === false
+              ? "The governor was not called. This observation has no risk verdict."
+              : "No open concerns recorded: every evidence record is confirmed and fresh, and all risk observations sit inside their limits."}
           </p>
         ) : (
           <ul className="grid grid-cols-1 gap-2.5">
@@ -345,7 +346,7 @@ export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
             </p>
           </div>
 
-          {priceSeries && (
+          {priceSeries && priceSeries.points.length >= 2 ? (
             <div className="overflow-hidden rounded-3xl border-2 border-ink bg-warmwhite shadow-[0_4px_0_rgba(23,25,22,0.85)]">
               <p className="border-b-2 border-line bg-paper px-5 py-3 text-xs font-bold uppercase tracking-wide text-ink-soft">
                 {instrument?.symbol} price · event markers
@@ -369,6 +370,10 @@ export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
                 </ul>
               </div>
             </div>
+          ) : (
+            <p className="rounded-3xl border-2 border-dashed border-line-strong bg-paper px-5 py-4 text-sm font-semibold text-ink-soft">
+              INSUFFICIENT_DATA. One stored price is not a history.
+            </p>
           )}
         </div>
       </section>

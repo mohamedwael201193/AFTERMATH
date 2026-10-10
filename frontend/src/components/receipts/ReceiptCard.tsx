@@ -67,6 +67,7 @@ export function ReceiptCard({ receipt }: { receipt: SignedReceipt }) {
       </div>
 
       <div className="grid gap-4 px-5 py-4">
+        {receipt.verification !== "UNAVAILABLE" && (
         <div className="flex flex-wrap items-center gap-3">
           <code className="tnum rounded-xl border-2 border-ink bg-forest-deep px-3.5 py-2 font-mono text-sm font-bold tracking-widest text-paper">
             {receipt.digestPreview}
@@ -83,7 +84,11 @@ export function ReceiptCard({ receipt }: { receipt: SignedReceipt }) {
             )}
           </button>
         </div>
+        )}
 
+        {receipt.verification === "UNAVAILABLE" ? (
+          <p className="text-sm font-semibold text-ink-soft">No receipt is attached, so there is no signature algorithm or timestamp authority for this row.</p>
+        ) : (
         <dl className="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
           <div className="flex gap-2">
             <dt className="shrink-0 font-bold uppercase tracking-wide text-ink-soft">Algorithm</dt>
@@ -114,6 +119,7 @@ export function ReceiptCard({ receipt }: { receipt: SignedReceipt }) {
             </dd>
           </div>
         </dl>
+        )}
 
         <p
           className={cn(
