@@ -21,6 +21,7 @@ export interface CycleSnapshot {
   receiptId: string | null;
   occurredAt: string | null;
   status: string | null;
+  stale: boolean;
 }
 
 const NAMES: Record<string, string> = {
@@ -100,6 +101,51 @@ function instrument(symbol: string): InstrumentIdentity {
   };
 }
 
+function anchorLabel(status?: string): string {
+  if (status === "not_anchored") return "Not anchored";
+  if (status === "pending") return "OpenTimestamps pending";
+  if (status === "confirmed") return "OpenTimestamps confirmed";
+  return status || "unavailable";
+}
+
+function anchorUnconfirmed(status?: string): boolean {
+  return status === "pending" || status === "not_anchored" || !status;
+}
+
+function cycleFromOps(ops: {
+  latest_run?: { status?: string; reason?: string; decision_id?: string; receipt_id?: string; finished_at_utc?: string; started_at_utc?: string };
+  fill_count?: number;
+  stale?: boolean;
+}): CycleSnapshot {
+  const latest = ops.latest_run;
+  return {
+    decisionCount: latest?.decision_id ? 1 : 0,
+    refusalCount: latest?.status === "refused" ? 1 : 0,
+    fillCount: typeof ops.fill_count === "number" ? ops.fill_count : 0,
+    reason: latest?.reason || null,
+    decisionId: latest?.decision_id || null,
+    receiptId: latest?.receipt_id || null,
+    occurredAt: latest?.finished_at_utc || latest?.started_at_utc || null,
+    status: latest?.status || null,
+    stale: ops.stale === true,
+  };
+}
+
+function activityFromCycle(cycle: CycleSnapshot): ActivityRecord[] {
+  if (!cycle.decisionId || !cycle.occurredAt) return [];
+  return [{
+    eventId: cycle.decisionId,
+    instrumentSymbol: "",
+    headline: `Paper cycle ${cycle.status || "recorded"}: ${cycle.reason || "no reason"}`,
+    decisionState: "NO ACTION",
+    riskOutcome: cycle.status === "approved" ? "APPROVED" : "REFUSED",
+    execution: cycle.fillCount > 0 ? "FILLED" : cycle.status === "refused" ? "REFUSED" : "NONE",
+    occurredAt: cycle.occurredAt,
+    sourceKind: "EXCHANGE_FEED",
+    receiptDigest: cycle.receiptId,
+  }];
+}
+
 export const liveDataProvider = {
   async listInstruments(): Promise<InstrumentIdentity[]> {
     const events = await this.listEvents();
@@ -148,11 +194,15 @@ export const liveDataProvider = {
         decisionState: "NO ACTION",
         status: "RESOLVED",
       };
+      const modelCalled = reason === "model_no_action" || reason === "awaiting_next_book";
       const decision: AIDecision = {
         eventId,
         state: "NO ACTION",
         confidence: 0,
-        plainLanguage: `${reason}. The model was not asked to authorize a trade.`,
+        plainLanguage: modelCalled
+          ? `${reason}. A model proposal was recorded and did not become a fill.`
+          : `${reason}. The model was not asked to authorize a trade.`,
+        modelCalled,
         reasoning: [reason],
         invalidationConditions: ["A verified event and a usable order book are required before a proposal."],
         proposedAction: null,
@@ -194,9 +244,9 @@ export const liveDataProvider = {
           eventId,
           digestPreview: String(stored.line?.line_hash || "").slice(0, 16),
           algorithm: "ed25519",
-          timestampAuthority: stored.ots_status === "pending" ? "OpenTimestamps pending" : String(stored.ots_status || "unavailable"),
+          timestampAuthority: anchorLabel(stored.ots_status),
           createdAt: event.occurredAt,
-          verification: verified.verified ? (stored.ots_status === "pending" ? "UNCONFIRMED" : "SIGNATURE_VERIFIED") : "UNAVAILABLE",
+          verification: verified.verified ? (anchorUnconfirmed(stored.ots_status) ? "UNCONFIRMED" : "SIGNATURE_VERIFIED") : "UNAVAILABLE",
           fieldsIncluded: ["decision_id", "status", "reason", "evidence_ids", "input_snapshot_hash"],
         };
       }
@@ -226,6 +276,7 @@ export const liveDataProvider = {
       state: "NO ACTION",
       confidence: 0,
       plainLanguage: `Latest paper cycle: ${reason}. This symbol row is a stored observation, not its own decision. The model was not asked to authorize a trade.`,
+      modelCalled: false,
       reasoning: [reason],
       invalidationConditions: ["A verified event tied to this instrument would be required before a proposal."],
       proposedAction: null,
@@ -251,29 +302,15 @@ export const liveDataProvider = {
       note: "No paper order was sent. This is not an exchange fill.",
       costBreakdown: [],
     };
-    let receipt: SignedReceipt = {
+    const receipt: SignedReceipt = {
       eventId,
       digestPreview: "none",
       algorithm: "ed25519",
-      timestampAuthority: "not requested for this event row",
+      timestampAuthority: "not attached to this observation",
       createdAt: event.occurredAt,
       verification: "UNAVAILABLE",
       fieldsIncluded: [],
     };
-    const receiptId = ops.latest_run?.receipt_id;
-    if (receiptId) {
-      const stored = (await readJson(`/v1/receipts/${receiptId}`)) as { id?: string; ots_status?: string; line?: { line_hash?: string } };
-      const verified = (await readJson(`/v1/receipts/${receiptId}/verify`, { method: "POST" })) as { verified?: boolean; ots_status?: string };
-      receipt = {
-        eventId,
-        digestPreview: String(stored.line?.line_hash || "").slice(0, 16),
-        algorithm: "ed25519",
-        timestampAuthority: stored.ots_status === "pending" ? "OpenTimestamps pending" : String(stored.ots_status || "unavailable"),
-        createdAt: event.occurredAt,
-        verification: verified.verified ? (stored.ots_status === "pending" ? "UNCONFIRMED" : "SIGNATURE_VERIFIED") : "UNAVAILABLE",
-        fieldsIncluded: ["decision_id", "status", "reason", "evidence_ids", "input_snapshot_hash"],
-      };
-    }
     return {
       event,
       instrument: event.instrumentSymbol ? instrument(event.instrumentSymbol) : null,
@@ -288,37 +325,44 @@ export const liveDataProvider = {
   },
 
   async getCycle(): Promise<CycleSnapshot> {
-    const ops = (await readJson("/v1/ops/status")) as {
-      latest_run?: { status?: string; reason?: string; decision_id?: string; receipt_id?: string; finished_at_utc?: string; started_at_utc?: string };
-    };
-    const fills = (await readJson("/v1/paper/fills")) as { items?: unknown[] };
-    const latest = ops.latest_run;
+    const ops = (await readJson("/v1/ops/status")) as Parameters<typeof cycleFromOps>[0];
+    return cycleFromOps(ops);
+  },
+
+  async loadDashboard(): Promise<{
+    events: MarketEvent[];
+    observations: MarketObservation[];
+    instruments: InstrumentIdentity[];
+    activity: ActivityRecord[];
+    cycle: CycleSnapshot;
+  }> {
+    const [eventBody, ops] = await Promise.all([
+      readJson("/v1/events?limit=50") as Promise<{ items?: Record<string, unknown>[] }>,
+      readJson("/v1/ops/status") as Promise<Parameters<typeof cycleFromOps>[0]>,
+    ]);
+    const items = eventBody.items || [];
+    const events = items.map(asEvent);
+    const seen = new Set<string>();
+    const observations: MarketObservation[] = [];
+    for (const item of items) {
+      const observation = asObservation(item);
+      if (!observation || seen.has(observation.symbol)) continue;
+      seen.add(observation.symbol);
+      observations.push(observation);
+    }
+    const symbols = [...new Set(events.map((event) => event.instrumentSymbol).filter(Boolean))] as string[];
+    const cycle = cycleFromOps(ops);
     return {
-      decisionCount: latest?.decision_id ? 1 : 0,
-      refusalCount: latest?.status === "refused" ? 1 : 0,
-      fillCount: (fills.items || []).length,
-      reason: latest?.reason || null,
-      decisionId: latest?.decision_id || null,
-      receiptId: latest?.receipt_id || null,
-      occurredAt: latest?.finished_at_utc || latest?.started_at_utc || null,
-      status: latest?.status || null,
+      events,
+      observations,
+      instruments: symbols.map(instrument),
+      activity: activityFromCycle(cycle),
+      cycle,
     };
   },
 
   async listActivity(): Promise<ActivityRecord[]> {
-    const cycle = await this.getCycle();
-    if (!cycle.decisionId || !cycle.occurredAt) return [];
-    return [{
-      eventId: cycle.decisionId,
-      instrumentSymbol: "",
-      headline: `Paper cycle ${cycle.status || "recorded"}: ${cycle.reason || "no reason"}`,
-      decisionState: "NO ACTION",
-      riskOutcome: cycle.status === "approved" ? "APPROVED" : "REFUSED",
-      execution: "NONE",
-      occurredAt: cycle.occurredAt,
-      sourceKind: "EXCHANGE_FEED",
-      receiptDigest: cycle.receiptId,
-    }];
+    return activityFromCycle(await this.getCycle());
   },
 
   async getReceipt(eventId: string): Promise<SignedReceipt | null> {

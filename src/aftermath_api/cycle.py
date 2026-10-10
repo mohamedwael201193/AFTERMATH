@@ -6,7 +6,10 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .decide import abstain
+from .decide import abstain, decide_bounded
+from .execution_context import PAPER_EQUITY, derive_execution
+from .paper import govern
+from .positions import advance_positions
 from .errors import ApiError
 from .ids import SCHEMA_VERSION, event_id, evidence_id, payload_hash, utc_now
 from .receipts import issue_receipt
@@ -96,7 +99,7 @@ def persist_observation(store, body: dict) -> dict:
     return {"event": event, "evidence": evidence}
 
 
-def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "") -> dict:
+def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", event_fetch=None, model_transport=None) -> dict:
     now = datetime.now(timezone.utc)
     key = "paper-cycle:v2:" + now.strftime("%Y-%m-%dT%H")
     existing = store.decision_for_key(key)
@@ -129,17 +132,39 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "") -> d
         cache = Path("/tmp/aftermath-cache") if Path("/tmp").is_dir() else Path(".") / "cache"
         cache.mkdir(parents=True, exist_ok=True)
         observations, errors = fetch_live(cache)
+    filings: list[dict] = []
+    if event_fetch is not None:
+        filings = event_fetch()
+    elif settings.sec_user_agent.strip() and settings.env != "test":
+        from .sources.edgar import fetch_filings
+        import requests
+
+        def transport(url, headers):
+            response = requests.get(url, headers=headers, timeout=20)
+            response.raise_for_status()
+            return response.json()
+
+        try:
+            filings = fetch_filings(settings.sec_user_agent, transport, utc_now())
+        except Exception as exc:
+            errors.append(getattr(exc, "message", None) or "sec_fetch_failed")
+    observations = list(observations) + list(filings)
+    advance_positions(store, observations, now)
     links = []
+    loaded = []
     if not observations:
         result = abstain("source_unavailable" if errors else "scheduled_no_new_evidence", [])
+        model_calls = 0
     else:
         rows = []
         for obs in observations:
             saved = persist_observation(store, obs)
             evid = saved["evidence"]["id"]
-            rows.append((evid, saved["evidence"]["payload_hash"]))
+            phash = saved["evidence"]["payload_hash"]
+            rows.append((evid, phash))
             links.append(evid)
-        result = abstain(cycle_reason(observations), rows)
+            loaded.append({"id": evid, "payload_hash": phash, "facts": obs.get("payload") or {}, "event": {**obs, "payload_hash": phash}})
+        result, model_calls = _decide_or_abstain(settings, store, observations, loaded, rows, now, model_transport)
     did = "dec_" + uuid.uuid4().hex[:24]
     store.insert_decision({
         "id": did,
@@ -152,6 +177,15 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "") -> d
         "idempotency_key": key,
         "created_at_utc": utc_now(),
     }, [{"decision_id": did, "evidence_id": evid, "position": i} for i, evid in enumerate(links)])
+    if result.get("pending_entry"):
+        store.insert_fill({
+            "id": "fill_" + uuid.uuid4().hex[:16],
+            "decision_id": did,
+            "idempotency_key": key + ":entry",
+            "status": "PENDING_ENTRY",
+            "cost_json": result["pending_entry"],
+            "created_at_utc": utc_now(),
+        })
     receipt = None
     path = Path(signing_path) if signing_path else None
     if path is not None and path.is_file():
@@ -163,7 +197,7 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "") -> d
             "input_snapshot_hash": final["input_snapshot_hash"],
             "evidence_ids": final["evidence_ids"],
             "prompt_hash": final["prompt_hash"],
-            "model": "absent",
+            "model": settings.llm_model if result["decision_source"] == "model" else "absent",
         })
     store.insert_run({
         "id": "run_" + uuid.uuid4().hex[:16],
@@ -173,7 +207,12 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "") -> d
         "decision_id": did,
         "started_at_utc": now.isoformat(),
         "finished_at_utc": utc_now(),
-        "detail": {"observations": len(observations), "fetch_errors": len(errors), "model_calls": 0},
+        "detail": {
+            "observations": len(observations),
+            "fetch_errors": len(errors),
+            "model_calls": model_calls,
+            "sec_edgar": "configured" if settings.sec_user_agent.strip() else "disabled",
+        },
     })
     return {
         "idempotency_key": key,
@@ -182,3 +221,83 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "") -> d
         "reason": result["reason"],
         "receipt_id": None if receipt is None else receipt["id"],
     }
+
+
+def _eligible_pair(observations: list[dict]) -> tuple[dict, dict] | None:
+    filings = [
+        row for row in observations
+        if row.get("event_type") == "filing" and (row.get("payload") or {}).get("qualifies") is True
+    ]
+    if not filings:
+        return None
+    filing = filings[0]
+    for book in observations:
+        if book.get("event_type") != "book" or book.get("instrument_id") != filing.get("instrument_id"):
+            continue
+        if _book_reason(book.get("payload") or {}) == "no_qualifying_event":
+            return filing, book
+    return None
+
+
+def _decide_or_abstain(settings, store, observations, loaded, rows, now, transport) -> tuple[dict, int]:
+    filings = [
+        row for row in observations
+        if row.get("event_type") == "filing" and (row.get("payload") or {}).get("qualifies") is True
+    ]
+    pair = _eligible_pair(observations)
+    if pair is None and filings:
+        same = [
+            row for row in observations
+            if row.get("event_type") == "book" and row.get("instrument_id") == filings[0].get("instrument_id")
+        ]
+        reason = _book_reason(same[0].get("payload") or {}) if same else "missing_order_book"
+        return abstain(reason, rows), 0
+    if pair is None:
+        return abstain(cycle_reason(observations), rows), 0
+    filing, _book = pair
+    cap = int(getattr(settings, "llm_daily_cap", 3))
+    used = store.model_calls_on_day(now.strftime("%Y-%m-%d"))
+    result = decide_bounded(
+        settings,
+        loaded,
+        symbol=filing["instrument_id"],
+        transport=transport,
+        calls_today=used,
+        daily_cap=cap,
+    )
+    if result.get("reason") == "awaiting_next_book" and result.get("proposal"):
+        result = _hold_if_approved(result, loaded, rows)
+    return result, 1 if result.get("model_called") else 0
+
+
+def _hold_if_approved(result: dict, loaded: list[dict], rows) -> dict:
+    events = [row["event"] for row in loaded if isinstance(row.get("event"), dict)]
+    derived = derive_execution(result["proposal"], events, "model")
+    if derived["error"]:
+        refused = abstain(derived["error"], rows, result["prompt_hash"])
+        refused["decision_source"] = "model"
+        refused["model_called"] = True
+        return refused
+    try:
+        verdict = govern(result["proposal"], derived["context"])
+    except (KeyError, TypeError, ValueError):
+        refused = abstain("invalid_risk_context", rows, result["prompt_hash"])
+        refused["decision_source"] = "model"
+        refused["model_called"] = True
+        return refused
+    if verdict.get("verdict") != "APPROVED":
+        refused = abstain(",".join(verdict.get("reasons") or ["refused"]), rows, result["prompt_hash"])
+        refused["decision_source"] = "model"
+        refused["model_called"] = True
+        return refused
+    result["pending_entry"] = {
+        "symbol": result["proposal"]["symbol"],
+        "action": result["proposal"]["action"],
+        "side": derived["side"],
+        "notional": float(verdict["size_frac"]) * PAPER_EQUITY,
+        "horizon_hours": float(result["proposal"]["horizon_hours"]),
+        "proposal_book_hash": derived["book_hash"],
+        "proposal_fetched_at": derived["proposal_fetched_at"],
+        "fee_rate": derived["fee_rate"],
+    }
+    return result

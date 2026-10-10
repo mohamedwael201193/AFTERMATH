@@ -39,16 +39,21 @@ export function useDashboardData(): DashboardData {
 
   useEffect(() => {
     let alive = true;
-    const cyclePromise = "getCycle" in dataProvider
-      ? (dataProvider as { getCycle: () => Promise<CycleStatus> }).getCycle()
-      : Promise.resolve(null);
-    Promise.all([
-      dataProvider.listEvents(),
-      dataProvider.getMarketOverview(),
-      dataProvider.listInstruments(),
-      dataProvider.listActivity(),
-      cyclePromise,
-    ]).then(([events, observations, instruments, activity, cycle]) => {
+    const loader = dataProvider as { loadDashboard?: () => Promise<NonNullable<typeof snapshot>> };
+    const request = loader.loadDashboard
+      ? loader.loadDashboard()
+      : Promise.all([
+          dataProvider.listEvents(),
+          dataProvider.getMarketOverview(),
+          dataProvider.listInstruments(),
+          dataProvider.listActivity(),
+          "getCycle" in dataProvider
+            ? (dataProvider as { getCycle: () => Promise<CycleStatus> }).getCycle()
+            : Promise.resolve(null),
+        ]).then(([events, observations, instruments, activity, cycle]) => ({
+          events, observations, instruments, activity, cycle,
+        }));
+    request.then(({ events, observations, instruments, activity, cycle }) => {
       if (!alive) return;
       setSnapshot({ events, observations, instruments, activity, cycle });
     }).catch((err: unknown) => {

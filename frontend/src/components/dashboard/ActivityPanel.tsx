@@ -5,7 +5,6 @@ import { ReceiptText } from "lucide-react";
 import type { ActivityRecord } from "@/types/domain";
 import { CostBreakdownChart } from "@/components/charts/CostBreakdownChart";
 import { TickerIcon } from "@/components/artwork/TickerIcon";
-import { paperExecutions } from "@/data/decisionRecords";
 import { instrumentCatalog } from "@/data/instrumentCatalog";
 import { formatEt, formatUsd } from "@/lib/format";
 import { useDashboardStore } from "@/lib/dashboardStore";
@@ -19,20 +18,15 @@ import { cn } from "@/lib/utils";
 export function ActivityPanel({ activity }: { activity: ActivityRecord[] }) {
   const selectEvent = useDashboardStore((s) => s.selectEvent);
 
-  const executionsByEvent = useMemo(
-    () => new Map(paperExecutions.map((p) => [p.eventId, p])),
+  const fills = activity.filter((a) => a.execution === "FILLED");
+  const refusals = activity.filter((a) => a.execution === "REFUSED");
+  const combinedCosts = useMemo(
+    () => [
+      { label: "Exchange fees", usd: 0 },
+      { label: "Slippage", usd: 0 },
+    ],
     []
   );
-
-  const fills = activity.filter((a) => a.execution === "FILLED");
-  const combinedCosts = useMemo(() => {
-    const fee = fills.reduce((s, f) => s + (executionsByEvent.get(f.eventId)?.feeUsd ?? 0), 0);
-    const slip = fills.reduce((s, f) => s + (executionsByEvent.get(f.eventId)?.slippageUsd ?? 0), 0);
-    return [
-      { label: "Exchange fees", usd: Math.round(fee * 100) / 100 },
-      { label: "Slippage", usd: Math.round(slip * 100) / 100 },
-    ];
-  }, [fills, executionsByEvent]);
 
   return (
     <div className="grid grid-cols-1 gap-6">
@@ -42,10 +36,9 @@ export function ActivityPanel({ activity }: { activity: ActivityRecord[] }) {
             The paper book — what actually happened
           </h3>
           <p className="mt-2 max-w-xl text-sm leading-relaxed text-ink-soft">
-            {fills.length} simulated fills and {activity.filter((a) => a.execution === "REFUSED").length}{" "}
-            order refusals in this window. Fills prove the pipeline works —
-            they are not profit claims. Every number here is an estimate from
-            the preview workspace.
+            {fills.length} stored paper {fills.length === 1 ? "fill" : "fills"} and {refusals.length} recorded{" "}
+            {refusals.length === 1 ? "refusal" : "refusals"}. Zero fills are not a profit result. Costs stay
+            INSUFFICIENT_DATA until a graded fill is stored.
           </p>
           <dl className="tnum mt-4 grid grid-cols-3 gap-3 text-center">
             <div className="rounded-2xl border-2 border-line bg-paper px-3 py-3">
@@ -55,13 +48,13 @@ export function ActivityPanel({ activity }: { activity: ActivityRecord[] }) {
             <div className="rounded-2xl border-2 border-line bg-paper px-3 py-3">
               <dt className="text-[10px] font-bold uppercase text-ink-soft">Order refusals</dt>
               <dd className="mt-1 font-display text-2xl text-risk">
-                {activity.filter((a) => a.execution === "REFUSED").length}
+                {refusals.length}
               </dd>
             </div>
             <div className="rounded-2xl border-2 border-forest bg-forest-mist px-3 py-3">
-              <dt className="text-[10px] font-bold uppercase text-forest-deep">Est. total costs</dt>
-              <dd className="mt-1 font-display text-2xl text-forest-deep">
-                {formatUsd(combinedCosts[0].usd + combinedCosts[1].usd)}
+              <dt className="text-[10px] font-bold uppercase text-forest-deep">Costs</dt>
+              <dd className="mt-1 font-display text-lg text-forest-deep">
+                {fills.length === 0 ? "INSUFFICIENT_DATA" : formatUsd(combinedCosts[0].usd + combinedCosts[1].usd)}
               </dd>
             </div>
           </dl>
@@ -70,7 +63,11 @@ export function ActivityPanel({ activity }: { activity: ActivityRecord[] }) {
           <p className="text-xs font-bold uppercase tracking-wide text-ink-soft">
             Estimated cost structure (fills)
           </p>
-          <CostBreakdownChart costs={combinedCosts} height={170} />
+          {fills.length === 0 ? (
+            <p className="mt-6 text-sm font-semibold text-ink-soft">INSUFFICIENT_DATA — no graded fill is stored.</p>
+          ) : (
+            <CostBreakdownChart costs={combinedCosts} height={170} />
+          )}
         </div>
       </section>
 
@@ -80,7 +77,6 @@ export function ActivityPanel({ activity }: { activity: ActivityRecord[] }) {
         </h3>
         <ol className="grid grid-cols-1 gap-3">
           {activity.map((a) => {
-            const ex = executionsByEvent.get(a.eventId);
             return (
               <li key={a.eventId}>
                 <button
@@ -105,11 +101,11 @@ export function ActivityPanel({ activity }: { activity: ActivityRecord[] }) {
                     </span>
                     <span className="flex shrink-0 items-center gap-2">
                       <TickerIcon
-                        symbol={a.instrumentSymbol}
+                        symbol={a.instrumentSymbol || "CYCLE"}
                         kind={instrumentCatalog.find((i) => i.symbol === a.instrumentSymbol)?.kind ?? "EQUITY_TOKEN"}
                         size={24}
                       />
-                      <span className="tnum text-xs font-bold text-ink">{a.instrumentSymbol}</span>
+                      <span className="tnum text-xs font-bold text-ink">{a.instrumentSymbol || "Cycle"}</span>
                     </span>
                     <span className="min-w-0 flex-1 truncate text-xs font-semibold text-ink-soft" title={a.headline}>
                       {a.headline}
@@ -118,16 +114,6 @@ export function ActivityPanel({ activity }: { activity: ActivityRecord[] }) {
                       {formatEt(a.occurredAt, "full")} ET
                     </span>
                   </div>
-                  {ex && (
-                    <p className="rounded-2xl border-2 border-dashed border-line-strong bg-paper px-4 py-2.5 text-xs leading-relaxed text-ink-soft">
-                      {ex.note}
-                      {ex.kind === "FILL" && ex.avgPriceUsd !== null && (
-                        <span className="tnum ml-2 font-bold text-forest-deep">
-                          {ex.filledTokens} @ {formatUsd(ex.avgPriceUsd)} · est. cost {formatUsd(ex.totalCostUsd)}
-                        </span>
-                      )}
-                    </p>
-                  )}
                   <p className="flex items-center gap-2 text-[10px] font-bold text-ink-soft">
                     <ReceiptText className="h-3.5 w-3.5" aria-hidden="true" />
                     <span className="tnum font-mono">{a.receiptDigest ?? "—"}</span>

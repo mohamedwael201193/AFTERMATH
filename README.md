@@ -21,11 +21,11 @@ SEC live requests stay off until `T2_SEC_USER_AGENT` is a real contact string.
 
 The frontend lives in `frontend/` and is a Next.js application. Its dashboard reads the API through `/api/read`, which forwards only the reader allowlist and attaches the reader token on the server. The landing preview is labeled sample data and is not the ledger. `GET /v1/metrics` remains `INSUFFICIENT_DATA` until graded paper outcomes exist.
 
-The paper cycle fetches Bitget public order books. A usable book without a qualifying filing or news event records `ABSTAIN` / `no_qualifying_event`. A missing book, a spread above 12 bp, or depth below 1000 USDT inside 25 bp records that specific refusal. The cycle does not call the model and does not create a fill. SEC requests stay off until `T2_SEC_USER_AGENT` is a real contact string. There is no project `LICENSE` file.
+The paper cycle fetches Bitget public order books. A usable book without a qualifying filing records `ABSTAIN` / `no_qualifying_event` and does not call the model. A qualifying filing on the same instrument can call the model once, inside a default cap of 3 production calls per day. The proposal book is not the fill book. SEC requests stay off until `T2_SEC_USER_AGENT` is a real contact string. There is no project `LICENSE` file.
 
 `POST /internal/jobs/paper-cycle` fetches the whitelisted Bitget tickers when it is invoked outside the test environment. A ticker without an order book is stored as evidence and the cycle records `ABSTAIN` / `missing_order_book`. It does not call the model and it does not create a paper fill. The same UTC hour is idempotent. GitHub Actions calls that route hourly when `AFTERMATH_JOB_TOKEN` is configured. A failed cycle fails the workflow; an empty or failed fetch is `source_unavailable`, not a trade.
 
-`GET /v1/metrics` returns `INSUFFICIENT_DATA` until graded paper outcomes exist. This service does not publish a profitability score. `GET /v1/ops/status` shows the latest cycle. Receipt `ots_status=pending` means the OpenTimestamps anchor is not confirmed.
+`GET /v1/metrics` returns `INSUFFICIENT_DATA` until graded paper outcomes exist. This service does not publish a profitability score. `GET /v1/ops/status` shows the latest cycle. A new receipt records `ots_status=not_anchored` until a proof is submitted. `pending` and `not_anchored` are not a confirmed Bitcoin timestamp.
 
 No license file is present for this project's own code. Public visibility is not a license grant. Vendored research code keeps its `NOTICE`.
 

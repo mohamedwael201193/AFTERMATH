@@ -66,7 +66,7 @@ def sign_line(private_path: Path, body: dict, prev_hash: str) -> dict:
 def issue_receipt(store, private_path: Path, body: dict) -> dict:
     line = sign_line(private_path, body, store.last_prev())
     stored = store.append_ledger(line)
-    row = {"id": "rcpt_" + stored["line_hash"][:16], "ledger_seq": stored["seq"], "ots_status": "pending"}
+    row = {"id": "rcpt_" + stored["line_hash"][:16], "ledger_seq": stored["seq"], "ots_status": "not_anchored"}
     store.insert_receipt(row)
     return {**row, "line": stored}
 

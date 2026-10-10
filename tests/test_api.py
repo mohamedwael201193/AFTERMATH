@@ -192,7 +192,7 @@ def test_signed_receipt_verifies_and_replay_does_not_extend_the_chain(tmp_path):
     second = http.post("/v1/decisions", headers=headers, json={"evidence_ids": [evid]})
     assert first.status_code == 200
     receipt = first.json()["receipt"]
-    assert receipt["ots_status"] == "pending"
+    assert receipt["ots_status"] == "not_anchored"
     assert second.json()["receipt"]["id"] == receipt["id"]
     assert len(store.ledger) == 1
     checked = http.post(f"/v1/receipts/{receipt['id']}/verify", headers={"Authorization": "Bearer reader-token"})

@@ -24,6 +24,7 @@ from .gate import core_blockers, has_order_book
 from .identity import accept_mapping, resolve_symbol
 from .ids import SCHEMA_VERSION, event_id, evidence_id, payload_hash, utc_now
 from .paper import govern, paper_fill
+from .positions import summarize
 from .receipts import chain_intact, issue_receipt, verify_line
 from .store import MemoryStore, PostgresStore
 
@@ -43,6 +44,18 @@ class RedactingFilter(logging.Filter):
 
 def _signing_ready(settings: Settings) -> bool:
     return bool(settings.signing_key_path) and Path(settings.signing_key_path).is_file()
+
+
+def _run_is_stale(run: dict | None) -> bool:
+    if not run or not run.get("finished_at_utc"):
+        return True
+    try:
+        finished = datetime.fromisoformat(str(run["finished_at_utc"]))
+    except ValueError:
+        return True
+    if finished.tzinfo is None:
+        finished = finished.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - finished > timedelta(hours=2)
 
 
 def _public_key(settings: Settings) -> Path | None:
@@ -219,7 +232,7 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
             "signature_ok": signature_ok,
             "chain_ok": chain_ok,
             "ots_status": row["ots_status"],
-            "anchor": "unconfirmed" if row["ots_status"] == "pending" else row["ots_status"],
+            "anchor": "unconfirmed" if row["ots_status"] in ("pending", "not_anchored") else row["ots_status"],
             "llm_reproduction": "not_available",
             "deterministic_checks": ["signature", "hash_chain"],
         }
@@ -231,22 +244,24 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
         if run and run.get("decision_id"):
             receipt = store.receipt_for_decision(run["decision_id"])
             run = {**run, "receipt_id": None if receipt is None else receipt["id"]}
-        return {"latest_run": run, "scheduler": "external_hourly_post", "paper_only": True}
+        sec = "configured" if settings.sec_user_agent else "disabled"
+        fills = store.list_fills()
+        opened = [row for row in fills if row.get("status") in ("PAPER_FILLED", "CLOSED")]
+        return {
+            "latest_run": run,
+            "scheduler": "external_hourly_post",
+            "schedule": "github_actions_hourly",
+            "continuous_operation": False,
+            "stale": _run_is_stale(run),
+            "fill_count": len(opened),
+            "paper_only": True,
+            "sources": {"sec_edgar": {"status": sec, "reason": None if settings.sec_user_agent else "sec_user_agent_missing"}},
+        }
 
     @app.get("/v1/metrics")
     def metrics(request: Request):
         reader(request)
-        fills = store.list_fills()
-        graded = [row for row in fills if (row.get("cost_json") or {}).get("outcome_bp") is not None]
-        if not graded:
-            return {
-                "status": "INSUFFICIENT_DATA",
-                "sample_size": 0,
-                "window": None,
-                "calculation_version": 1,
-                "note": "No graded paper outcomes are stored on this service.",
-            }
-        return {"status": "RECORDED", "sample_size": len(graded), "window": None, "calculation_version": 1}
+        return summarize(store.list_fills())
 
     @app.post("/v1/decisions")
     async def decisions(request: Request):
@@ -264,6 +279,10 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
                 "receipt": store.receipt_for_decision(prior_id),
             }
         body = await request.json()
+        from .execution_context import caller_controlled, derive_execution
+
+        if settings.env == "prod" and caller_controlled(body):
+            raise ApiError("SCHEMA", "caller cannot set execution inputs", 422)
         ids = body.get("evidence_ids")
         if not isinstance(ids, list) or not ids:
             raise ApiError("INSUFFICIENT_EVIDENCE", "evidence_ids required", 422)
@@ -318,30 +337,72 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
         fill = None
         receipt = None
         if result["status"] == "PAPER_PROPOSED" and result.get("proposal"):
-            ctx = body.get("risk_context") or {}
-            verdict = govern(result["proposal"], ctx)
-            if verdict["verdict"] != "APPROVED":
-                saved = store.update_decision(saved["id"], status="RISK_REJECTED", reason=",".join(verdict.get("reasons") or []))
+            supplied = caller_controlled(body)
+            if settings.env == "prod" or not supplied:
+                derived = derive_execution(result["proposal"], events, result["decision_source"])
+                if derived["error"]:
+                    saved = store.update_decision(saved["id"], status="RISK_REJECTED", reason=derived["error"])
+                else:
+                    try:
+                        verdict = govern(result["proposal"], derived["context"])
+                    except (KeyError, TypeError, ValueError):
+                        saved = store.update_decision(saved["id"], status="RISK_REJECTED", reason="invalid_risk_context")
+                        verdict = None
+                    if verdict is None:
+                        pass
+                    elif verdict["verdict"] != "APPROVED":
+                        saved = store.update_decision(saved["id"], status="RISK_REJECTED", reason=",".join(verdict.get("reasons") or []))
+                    else:
+                        notional = float(verdict["size_frac"]) * float(derived["context"]["equity"])
+                        fill = store.insert_fill({
+                            "id": "fill_" + uuid.uuid4().hex[:16],
+                            "decision_id": saved["id"],
+                            "idempotency_key": key,
+                            "status": "PENDING_ENTRY",
+                            "cost_json": {
+                                "symbol": result["proposal"]["symbol"],
+                                "action": result["proposal"]["action"],
+                                "side": derived["side"],
+                                "notional": notional,
+                                "horizon_hours": float(result["proposal"].get("horizon_hours") or 24),
+                                "proposal_book_hash": derived["book_hash"],
+                                "proposal_fetched_at": derived["proposal_fetched_at"],
+                                "fee_rate": derived["fee_rate"],
+                            },
+                            "created_at_utc": now,
+                        })
+                        saved = store.update_decision(saved["id"], status="AWAITING_NEXT_BOOK", reason="awaiting_next_book")
             else:
-                requested = float(body.get("notional", 0))
-                cap = float(verdict["size_frac"]) * float(ctx.get("equity") or 0)
-                notional = requested if not math.isfinite(requested) else min(requested, cap)
-                walk = paper_fill(
-                    int(body.get("side", 1)),
-                    notional,
-                    float(body.get("ref_price", 0)),
-                    body.get("book") or {"bids": [], "asks": []},
-                    float(body.get("fee_rate", 0)),
-                )
-                fill = store.insert_fill({
-                    "id": "fill_" + uuid.uuid4().hex[:16],
-                    "decision_id": saved["id"],
-                    "idempotency_key": key,
-                    "status": walk["status"],
-                    "cost_json": walk,
-                    "created_at_utc": now,
-                })
-                saved = store.update_decision(saved["id"], status=walk["status"])
+                ctx = body.get("risk_context") or {}
+                try:
+                    verdict = govern(result["proposal"], ctx)
+                except (KeyError, TypeError, ValueError):
+                    saved = store.update_decision(saved["id"], status="RISK_REJECTED", reason="invalid_risk_context")
+                    verdict = None
+                if verdict is None:
+                    pass
+                elif verdict["verdict"] != "APPROVED":
+                    saved = store.update_decision(saved["id"], status="RISK_REJECTED", reason=",".join(verdict.get("reasons") or []))
+                else:
+                    requested = float(body.get("notional", 0))
+                    cap = float(verdict["size_frac"]) * float(ctx.get("equity") or 0)
+                    notional = requested if not math.isfinite(requested) else min(requested, cap)
+                    walk = paper_fill(
+                        int(body.get("side", 1)),
+                        notional,
+                        float(body.get("ref_price", 0)),
+                        body.get("book") or {"bids": [], "asks": []},
+                        float(body.get("fee_rate", 0)),
+                    )
+                    fill = store.insert_fill({
+                        "id": "fill_" + uuid.uuid4().hex[:16],
+                        "decision_id": saved["id"],
+                        "idempotency_key": key,
+                        "status": walk["status"],
+                        "cost_json": walk,
+                        "created_at_utc": now,
+                    })
+                    saved = store.update_decision(saved["id"], status=walk["status"])
         if _signing_ready(settings):
             try:
                 final = store.get_decision(saved["id"])
@@ -364,13 +425,23 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
     def paper_cycle(request: Request):
         require_job(settings, request.headers.get("authorization"))
         fetcher = getattr(app.state, "cycle_fetch", None)
-        return run_paper_cycle(settings, store, fetch=fetcher, signing_path=settings.signing_key_path)
+        return run_paper_cycle(
+            settings,
+            store,
+            fetch=fetcher,
+            signing_path=settings.signing_key_path,
+            event_fetch=getattr(app.state, "event_fetch", None),
+            model_transport=getattr(app.state, "model_transport", None),
+        )
 
     @app.post("/v1/events")
     async def ingest(request: Request):
         require_decision(settings, request.headers.get("authorization"))
         body = await request.json()
-        if str(body.get("instrument_id", "")).startswith("fixture:") and settings.env == "prod":
+        if settings.env == "prod" and (
+            str(body.get("instrument_id", "")).startswith("fixture:")
+            or str(body.get("source", "")).lower() == "fixture"
+        ):
             raise ApiError("SCHEMA", "fixture instruments are refused", 422)
         symbol, _mapped, reason = resolve_symbol(str(body.get("instrument_id", "")))
         if symbol is None:

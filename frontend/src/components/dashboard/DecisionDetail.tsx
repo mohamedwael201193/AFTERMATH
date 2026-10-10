@@ -130,20 +130,25 @@ export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
           ))}
         </div>
         <p className="text-xs text-ink-soft">
-          Every fact the AI may cite lives here — with its source, timestamp, units,
-          and freshness. Nothing outside this list can enter the reasoning.
+          Stored evidence for this record, with its source, timestamp, units, and freshness.
+          A cycle refusal does not turn this list into a model decision.
         </p>
       </section>
 
       {/* ── 3 · the decision ───────────────────────────────── */}
       <section className="grid grid-cols-1 gap-3">
-        <SectionTitle icon={BrainCircuit} step="03">What did the AI decide?</SectionTitle>
+        <SectionTitle icon={BrainCircuit} step="03">
+          {decision.modelCalled === false ? "Cycle refusal — model not called" : "What did the AI decide?"}
+        </SectionTitle>
         <div className="overflow-hidden rounded-3xl border-2 border-ink bg-warmwhite shadow-[0_4px_0_rgba(23,25,22,0.85)]">
           <div className="flex flex-wrap items-center gap-4 border-b-2 border-line bg-paper px-5 py-4">
             <DecisionBadge state={decision.state} size="lg" />
+            {decision.modelCalled === false ? (
+              <p className="text-sm font-semibold text-ink-soft">No model confidence — the model was not called.</p>
+            ) : (
             <div className="min-w-[160px] flex-1">
               <div className="flex items-center justify-between text-xs font-bold text-ink-soft">
-                <span>Stated confidence</span>
+                <span>Model-stated confidence</span>
                 <span className="tnum text-ink">{formatConfidence(decision.confidence)}</span>
               </div>
               <div
@@ -163,6 +168,7 @@ export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
                 />
               </div>
             </div>
+            )}
             {decision.proposedAction && (
               <span className="tnum inline-flex items-center gap-2 rounded-full border-2 border-ink bg-forest-mist px-3.5 py-1.5 text-sm font-bold text-forest-deep">
                 <TrendingUp className="h-4 w-4" aria-hidden="true" />

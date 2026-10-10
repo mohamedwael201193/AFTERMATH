@@ -157,7 +157,7 @@ export function OverviewPanel({
           icon={ShieldCheck}
           label="Risk blocks"
           value={String(cycle?.refusalCount ?? blocks.length)}
-          hint={cycle?.reason || "refusals as designed"}
+          hint={cycle?.stale ? "last cycle is older than 2 hours" : cycle?.reason || "refusals as designed"}
           detail={
             <p className="text-[11px] font-semibold text-ink-soft">
               Missing evidence, stale data, or unsupported claims

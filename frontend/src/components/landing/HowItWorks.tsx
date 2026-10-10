@@ -27,8 +27,8 @@ const STAGES = [
   {
     glyph: JudgmentGlyph,
     step: "03",
-    title: "The AI judges",
-    text: "A language model reads only the captured evidence and returns a decision, a confidence, and what would change its mind.",
+    title: "The model is gated",
+    text: "A model is called only after a qualifying event and a usable book pass the evidence gate. Otherwise the cycle records a refusal and does not invent a decision.",
   },
   {
     glyph: RiskGlyph,

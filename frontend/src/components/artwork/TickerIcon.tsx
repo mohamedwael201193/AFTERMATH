@@ -42,12 +42,8 @@ const TICKER_DOMAINS: Record<string, string> = {
 };
 
 /** URLs tried in order for one ticker (uppercase, per icon policy). */
-export function tickerIconSources(symbol: string): string[] {
-  const t = symbol.toUpperCase();
-  const sources = [`${PNG_CDN_BASE}/${t}.png`];
-  const domain = TICKER_DOMAINS[t];
-  if (domain) sources.push(`${FAVICON_CDN_BASE}?domain=${domain}&sz=64`);
-  return sources;
+export function tickerIconSources(_symbol: string): string[] {
+  return [];
 }
 
 /** Remembers broken URLs across mounts so lists never re-request them. */

@@ -41,6 +41,7 @@ class Settings:
     sec_user_agent: str
     web_origin: str
     decisions: str
+    llm_daily_cap: int = 3
 
     def public_status(self) -> dict[str, str]:
         return {
@@ -86,7 +87,17 @@ def load_settings(env_file: Path | None = None, environ: dict[str, str] | None =
         sec_user_agent=merged.get("T2_SEC_USER_AGENT", ""),
         web_origin=merged.get("AFTERMATH_WEB_ORIGIN", ""),
         decisions="model" if llm else "abstain_only",
+        llm_daily_cap=_daily_cap(merged.get("AFTERMATH_LLM_MAX_CALLS_PER_DAY", "")),
     )
+
+
+def _daily_cap(raw: str) -> int:
+    if not str(raw).strip():
+        return 3
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 3
 
 
 def format_status(settings: Settings) -> str:

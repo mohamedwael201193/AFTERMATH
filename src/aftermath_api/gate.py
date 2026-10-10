@@ -38,12 +38,23 @@ def core_blockers(events: list[dict], now: datetime | None = None) -> str | None
 
 def has_order_book(events: list[dict]) -> bool:
     for event in events:
-        if event.get("event_type") == "book":
-            return True
         payload = event.get("payload") or {}
-        if payload.get("bids") and payload.get("asks"):
+        if _valid_book(payload):
             return True
     return False
+
+
+def _valid_book(payload: dict) -> bool:
+    try:
+        bid = float(payload["bid"])
+        ask = float(payload["ask"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if not math.isfinite(bid) or not math.isfinite(ask) or bid <= 0 or ask <= bid:
+        return False
+    bids = payload.get("bids") or []
+    asks = payload.get("asks") or []
+    return bool(bids) and bool(asks)
 
 
 def _invalid_price(payload: dict) -> bool:

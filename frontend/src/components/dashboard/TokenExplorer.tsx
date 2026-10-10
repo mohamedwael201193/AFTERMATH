@@ -4,12 +4,34 @@ import { useMemo, useState } from "react";
 import { Search, Eye } from "lucide-react";
 import type { MarketEvent, MarketObservation } from "@/types/domain";
 import { TickerIcon } from "@/components/artwork/TickerIcon";
-import { DecisionBadge } from "@/components/dashboard/DecisionBadge";
 import { FreshnessDot } from "@/components/artwork/StatusGlyphs";
-import { instrumentCatalog } from "@/data/instrumentCatalog";
 import { formatPct, formatUsd, FRESHNESS_LABELS } from "@/lib/format";
 import { useDashboardStore } from "@/lib/dashboardStore";
 import { cn } from "@/lib/utils";
+
+const WHITELIST = [
+  ["NVDAUSDT", "NVIDIA"],
+  ["TSLAUSDT", "Tesla"],
+  ["AAPLUSDT", "Apple"],
+  ["AMZNUSDT", "Amazon"],
+  ["MSFTUSDT", "Microsoft"],
+  ["METAUSDT", "Meta"],
+  ["GOOGLUSDT", "Alphabet"],
+  ["COINUSDT", "Coinbase"],
+  ["MSTRUSDT", "MicroStrategy"],
+].map(([symbol, name]) => ({
+  symbol,
+  name,
+  kind: "EQUITY_TOKEN" as const,
+  company: name,
+  referenceSymbol: symbol.replace(/USDT$/, ""),
+  venue: "Bitget USDT perpetual",
+}));
+
+function sameSymbol(left: string, right: string): boolean {
+  const norm = (value: string) => value.toUpperCase().replace(/USDT$/, "");
+  return norm(left) === norm(right);
+}
 
 /**
  * Market & token explorer — a searchable grid of representative
@@ -30,12 +52,12 @@ export function TokenExplorer({
 
   const entries = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return instrumentCatalog
+    return WHITELIST
       .map((i) => ({
         instrument: i,
-        observation: observations.find((o) => o.symbol === i.symbol) ?? null,
+        observation: observations.find((o) => sameSymbol(o.symbol, i.symbol)) ?? null,
         latestEvent:
-          events.find((e) => e.instrumentSymbol === i.symbol) ?? null,
+          events.find((e) => e.instrumentSymbol && sameSymbol(e.instrumentSymbol, i.symbol)) ?? null,
       }))
       .filter(({ instrument }) => {
         if (!q) return true;
@@ -69,7 +91,7 @@ export function TokenExplorer({
           />
         </div>
         <p className="text-xs font-semibold text-ink-soft">
-          {entries.length} of {instrumentCatalog.length} whitelist instruments · stored snapshots only
+          {entries.length} of {WHITELIST.length} whitelist instruments · stored snapshots only
         </p>
       </div>
 
@@ -123,9 +145,11 @@ export function TokenExplorer({
                 )}
 
                 <div className="flex flex-wrap items-center gap-2">
-                  <DecisionBadge state={instrument.decisionState} size="sm" />
+                  <span className="rounded-full border border-line-strong bg-paper px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ink-soft">
+                    Observation only
+                  </span>
                   <span className="text-[11px] font-semibold text-ink-soft">
-                    {latestEvent ? "Latest event in window" : "No events in window"}
+                    {latestEvent ? "Stored market row" : "No stored observation"}
                   </span>
                 </div>
               </button>
@@ -148,7 +172,9 @@ export function TokenExplorer({
                       </div>
                     )}
                   </dl>
-                  <p className="text-xs leading-relaxed text-ink-soft">{instrument.note}</p>
+                  <p className="text-xs leading-relaxed text-ink-soft">
+                    Whitelist identity only. This card does not carry a decision.
+                  </p>
                   {latestEvent ? (
                     <button
                       onClick={() => {
@@ -162,7 +188,7 @@ export function TokenExplorer({
                     </button>
                   ) : (
                     <p className="text-xs font-semibold text-ink-soft">
-                      Nothing to inspect — this instrument has no events in the current preview window.
+                      No stored observation for this symbol.
                     </p>
                   )}
                 </div>

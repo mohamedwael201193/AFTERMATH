@@ -112,8 +112,10 @@ export interface ProposedAction {
 export interface AIDecision {
   eventId: string;
   state: DecisionState;
-  /** 0..1 model-stated confidence. */
+  /** 0..1 model-stated confidence. Absent when the model was not called. */
   confidence: number;
+  /** True only when a model proposal was recorded for this decision. */
+  modelCalled?: boolean;
   /** One-sentence plain-language verdict. */
   plainLanguage: string;
   /** Short reasoning bullets, each tied to evidence where possible. */

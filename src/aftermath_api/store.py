@@ -86,6 +86,13 @@ class MemoryStore:
         links.sort(key=lambda x: x["position"])
         return {**row, "evidence_ids": [x["evidence_id"] for x in links]}
 
+    def model_calls_on_day(self, day: str) -> int:
+        return sum(
+            1
+            for row in self.decisions.values()
+            if row.get("decision_source") == "model" and str(row.get("created_at_utc", "")).startswith(day)
+        )
+
     def insert_fill(self, row: dict) -> dict:
         key = row["idempotency_key"]
         if key in self.fills:
@@ -122,6 +129,13 @@ class MemoryStore:
 
     def list_fills(self) -> list:
         return list(self.fills.values())
+
+    def update_fill(self, fill_id: str, **fields) -> dict | None:
+        for row in self.fills.values():
+            if row.get("id") == fill_id:
+                row.update(fields)
+                return row
+        return None
 
     def list_ledger(self) -> list:
         return list(self.ledger)
@@ -301,6 +315,14 @@ class PostgresStore:
             "evidence_ids": [x[0] for x in links],
         }
 
+    def model_calls_on_day(self, day: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT COUNT(*) FROM {self.schema}.decisions WHERE decision_source = 'model' AND created_at_utc::text LIKE %s",
+                (day + "%",),
+            ).fetchone()
+        return int(row[0])
+
     def insert_fill(self, row: dict) -> dict:
         from psycopg.types.json import Json
 
@@ -320,6 +342,17 @@ class PostgresStore:
         with self._connect() as conn:
             rows = conn.execute(f"SELECT id, decision_id, idempotency_key, status, cost_json, created_at_utc FROM {self.schema}.paper_fills").fetchall()
         return [_fill_row(r) for r in rows]
+
+    def update_fill(self, fill_id: str, **fields) -> dict | None:
+        from psycopg.types.json import Json
+
+        with self._connect() as conn:
+            row = conn.execute(
+                f"UPDATE {self.schema}.paper_fills SET status = %s, cost_json = %s WHERE id = %s RETURNING id, decision_id, idempotency_key, status, cost_json, created_at_utc",
+                (fields["status"], Json(fields["cost_json"]), fill_id),
+            ).fetchone()
+            conn.commit()
+        return _fill_row(row) if row else None
 
     def fill_for_key(self, key: str) -> dict | None:
         with self._connect() as conn:

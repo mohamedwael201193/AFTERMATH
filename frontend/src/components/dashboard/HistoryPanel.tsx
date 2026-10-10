@@ -35,6 +35,7 @@ const RANGES: { value: RangeFilter; label: string }[] = [
  */
 export function HistoryPanel({ activity }: { activity: ActivityRecord[] }) {
   const selectEvent = useDashboardStore((s) => s.selectEvent);
+  const search = useDashboardStore((s) => s.searchQuery).trim().toLowerCase();
   const panelOpen = !!useDashboardStore((s) => s.selectedEventId);
   const [outcome, setOutcome] = useState<OutcomeFilter>("ALL");
   const [range, setRange] = useState<RangeFilter>("ALL");
@@ -52,9 +53,13 @@ export function HistoryPanel({ activity }: { activity: ActivityRecord[] }) {
         const ageH = (Date.now() - Date.parse(a.occurredAt)) / 3600000;
         if (ageH > hours) return false;
       }
+      if (search) {
+        const haystack = `${a.eventId} ${a.headline} ${a.instrumentSymbol}`.toLowerCase();
+        if (!haystack.includes(search)) return false;
+      }
       return true;
     });
-  }, [activity, outcome, range, source, verification]);
+  }, [activity, outcome, range, source, verification, search]);
 
   const anyFilter =
     outcome !== "ALL" || range !== "ALL" || source !== "ALL" || verification !== "ALL";
@@ -230,11 +235,11 @@ export function HistoryPanel({ activity }: { activity: ActivityRecord[] }) {
                       <td className="whitespace-nowrap px-3 py-3">
                         <span className="flex items-center gap-1.5">
                           <TickerIcon
-                            symbol={a.instrumentSymbol}
+                            symbol={a.instrumentSymbol || "CYCLE"}
                             kind={catalog?.kind ?? "EQUITY_TOKEN"}
                             size={26}
                           />
-                          <span className="text-xs font-bold text-ink">{a.instrumentSymbol}</span>
+                          <span className="text-xs font-bold text-ink">{a.instrumentSymbol || "Cycle"}</span>
                         </span>
                       </td>
                       <td className={cn("max-w-[20rem] px-3 py-3", panelOpen && "hidden 2xl:table-cell")}>
@@ -289,8 +294,8 @@ export function HistoryPanel({ activity }: { activity: ActivityRecord[] }) {
                     className="grid w-full grid-cols-1 gap-2.5 rounded-3xl border-2 border-line bg-warmwhite px-4 py-3.5 text-left transition-colors hover:border-ink"
                   >
                     <div className="flex items-center gap-2.5">
-                      <TickerIcon symbol={a.instrumentSymbol} kind={catalog?.kind ?? "EQUITY_TOKEN"} size={30} />
-                      <span className="tnum text-xs font-bold text-ink">{a.instrumentSymbol}</span>
+                      <TickerIcon symbol={a.instrumentSymbol || "CYCLE"} kind={catalog?.kind ?? "EQUITY_TOKEN"} size={30} />
+                      <span className="tnum text-xs font-bold text-ink">{a.instrumentSymbol || "Cycle"}</span>
                       <DecisionBadge state={a.decisionState} size="sm" />
                       <span className="tnum ml-auto text-[10px] font-semibold text-ink-soft">
                         {formatEt(a.occurredAt, "full")} ET
