@@ -41,10 +41,20 @@ def load_public(public_path: Path) -> tuple[Ed25519PublicKey, str]:
     return Ed25519PublicKey.from_public_bytes(raw), info["key_id"]
 
 
+def read_private_bytes(private_path: Path) -> bytes:
+    raw = private_path.read_bytes()
+    if len(raw) == 32:
+        return raw
+    text = raw.decode("ascii").strip()
+    if len(text) == 64:
+        return bytes.fromhex(text)
+    raise ValueError("private key must be 32 raw bytes or 64 hex characters")
+
+
 def sign_line(private_path: Path, body: dict, prev_hash: str) -> dict:
     if not private_path.is_file():
         raise FileNotFoundError(str(private_path))
-    priv = Ed25519PrivateKey.from_private_bytes(private_path.read_bytes())
+    priv = Ed25519PrivateKey.from_private_bytes(read_private_bytes(private_path))
     pub = priv.public_key().public_bytes_raw()
     kid = key_id(pub)
     payload = json.dumps({"body": body, "prev_hash": prev_hash}, sort_keys=True, separators=(",", ":")).encode()

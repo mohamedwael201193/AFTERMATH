@@ -166,6 +166,17 @@ def test_vendored_execution_has_no_private_order_route():
     assert "/api/v2/mix/order" not in text
 
 
+def test_hex_private_key_matches_raw_key(tmp_path):
+    private = tmp_path / "production_ed25519.key"
+    public = tmp_path / "production_ed25519.pub"
+    generate_production_key(private, public)
+    hex_path = tmp_path / "production_ed25519.hex"
+    hex_path.write_text(private.read_bytes().hex(), encoding="ascii")
+    body = {"kind": "decision", "id": "dec_1"}
+    assert sign_line(hex_path, body, "GENESIS")["pubkey_id"] == sign_line(private, body, "GENESIS")["pubkey_id"]
+    assert verify_line(public, sign_line(hex_path, body, "GENESIS"))
+
+
 def test_receipt_detects_tamper(tmp_path):
     private = tmp_path / "production_ed25519.key"
     public = tmp_path / "production_ed25519.pub"
