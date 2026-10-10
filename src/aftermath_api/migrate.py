@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 from .config import ROOT
-from .db import apply_migration, connect
+from .db import apply_migration, connect, migration_paths
 
 
 def main() -> None:
@@ -20,6 +20,8 @@ def main() -> None:
     schema = os.environ.get("AFTERMATH_SCHEMA", "aftermath")
     conn = connect(url)
     try:
+        names = ",".join(path.name for path in migration_paths())
+        print(f"migrations {names}")
         apply_migration(conn, schema)
         count = conn.execute(
             "SELECT count(*) FROM information_schema.tables WHERE table_schema = %s",

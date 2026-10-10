@@ -6,16 +6,28 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-MIGRATIONS = sorted((ROOT / "migrations").glob("*.sql"))
+
+
+def migration_paths() -> list[Path]:
+    candidates = [ROOT / "migrations", ROOT.parent / "migrations"]
+    for directory in candidates:
+        paths = sorted(directory.glob("*.sql"))
+        names = {path.name for path in paths}
+        if "0001_init.sql" in names and "0002_paper_runs.sql" in names:
+            return paths
+    raise SystemExit("migrations missing")
 
 
 def apply_migration(conn, schema: str = "aftermath") -> None:
     if not schema.replace("_", "").isalnum():
         raise ValueError("schema name")
-    for path in MIGRATIONS:
+    for path in migration_paths():
         sql = path.read_text(encoding="utf-8").replace("aftermath", schema)
         conn.execute(sql)
     conn.commit()
+    found = conn.execute("SELECT to_regclass(%s)", (f"{schema}.paper_runs",)).fetchone()[0]
+    if found is None:
+        raise SystemExit("paper_runs missing")
 
 
 def connect(url: str, *, prepare: bool = True):

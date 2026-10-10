@@ -71,12 +71,24 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "") -> d
     key = "paper-cycle:" + now.strftime("%Y-%m-%dT%H")
     existing = store.decision_for_key(key)
     if existing:
+        decision = store.get_decision(existing)
         receipt = store.receipt_for_decision(existing)
+        if store.run_for_key(key) is None:
+            store.insert_run({
+                "id": "run_" + uuid.uuid4().hex[:16],
+                "idempotency_key": key,
+                "status": "refused" if decision["status"] == "ABSTAIN" else decision["status"],
+                "reason": decision["reason"],
+                "decision_id": existing,
+                "started_at_utc": decision["created_at_utc"],
+                "finished_at_utc": utc_now(),
+                "detail": {"observations": len(decision.get("evidence_ids") or []), "model_calls": 0, "recovered": True},
+            })
         return {
             "idempotency_key": key,
             "decision_id": existing,
             "repeated": True,
-            "reason": store.get_decision(existing).get("reason"),
+            "reason": decision.get("reason"),
             "receipt_id": None if receipt is None else receipt["id"],
         }
     observations: list[dict] = []

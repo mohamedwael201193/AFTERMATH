@@ -117,6 +117,9 @@ class MemoryStore:
             return None
         return sorted(self.runs.values(), key=lambda item: item["started_at_utc"])[-1]
 
+    def run_for_key(self, key: str) -> dict | None:
+        return self.runs.get(key)
+
     def list_fills(self) -> list:
         return list(self.fills.values())
 
@@ -362,6 +365,14 @@ class PostgresStore:
         with self._connect() as conn:
             row = conn.execute(
                 f"SELECT id, idempotency_key, status, reason, decision_id, started_at_utc, finished_at_utc, detail FROM {self.schema}.paper_runs ORDER BY started_at_utc DESC LIMIT 1"
+            ).fetchone()
+        return _run_row(row) if row else None
+
+    def run_for_key(self, key: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT id, idempotency_key, status, reason, decision_id, started_at_utc, finished_at_utc, detail FROM {self.schema}.paper_runs WHERE idempotency_key = %s",
+                (key,),
             ).fetchone()
         return _run_row(row) if row else None
 
