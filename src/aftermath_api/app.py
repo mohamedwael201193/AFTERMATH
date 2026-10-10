@@ -228,6 +228,9 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
     def ops_status(request: Request):
         reader(request)
         run = store.latest_run()
+        if run and run.get("decision_id"):
+            receipt = store.receipt_for_decision(run["decision_id"])
+            run = {**run, "receipt_id": None if receipt is None else receipt["id"]}
         return {"latest_run": run, "scheduler": "external_hourly_post", "paper_only": True}
 
     @app.get("/v1/metrics")

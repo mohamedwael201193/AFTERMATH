@@ -32,10 +32,40 @@ def fetch_live(cache_dir: Path) -> tuple[list[dict], list[str]]:
     errors: list[str] = []
     for symbol in WHITELIST:
         try:
-            observations.append(connector.ticker(symbol))
+            observations.append(connector.depth(symbol))
         except ApiError as exc:
             errors.append(exc.code)
     return observations, errors
+
+
+def cycle_reason(observations: list[dict]) -> str:
+    """Refuse from the books actually fetched. A usable book is not a trade."""
+    books = [row for row in observations if row.get("event_type") == "book"]
+    if not books:
+        return "missing_order_book"
+    reasons = [_book_reason(row.get("payload") or {}) for row in books]
+    if "no_qualifying_event" in reasons:
+        return "no_qualifying_event"
+    if "spread_too_wide" in reasons:
+        return "spread_too_wide"
+    if "insufficient_depth" in reasons:
+        return "insufficient_depth"
+    return "missing_order_book"
+
+
+def _book_reason(payload: dict) -> str:
+    try:
+        spread = float(payload["spread_bp"])
+        depth = float(payload["depth_usdt"])
+    except (KeyError, TypeError, ValueError):
+        return "missing_order_book"
+    if spread != spread or depth != depth:
+        return "missing_order_book"
+    if spread > 12:
+        return "spread_too_wide"
+    if depth < 1000:
+        return "insufficient_depth"
+    return "no_qualifying_event"
 
 
 def persist_observation(store, body: dict) -> dict:
@@ -68,7 +98,7 @@ def persist_observation(store, body: dict) -> dict:
 
 def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "") -> dict:
     now = datetime.now(timezone.utc)
-    key = "paper-cycle:" + now.strftime("%Y-%m-%dT%H")
+    key = "paper-cycle:v2:" + now.strftime("%Y-%m-%dT%H")
     existing = store.decision_for_key(key)
     if existing:
         decision = store.get_decision(existing)
@@ -109,7 +139,7 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "") -> d
             evid = saved["evidence"]["id"]
             rows.append((evid, saved["evidence"]["payload_hash"]))
             links.append(evid)
-        result = abstain("missing_order_book", rows)
+        result = abstain(cycle_reason(observations), rows)
     did = "dec_" + uuid.uuid4().hex[:24]
     store.insert_decision({
         "id": did,

@@ -2,11 +2,13 @@
 
 The browser does not call Render directly with a decision, job, model, signing, or database credential.
 
-When `FRONTEND/` is supplied, its server proxy holds only the reader token. It may forward:
+The same-origin proxy is `frontend/src/app/api/read/[...path]/route.ts`. It holds only the reader token in `AFTERMATH_API_TOKEN` and may forward:
 
 - `GET /health`
 - `GET /ready`
 - `GET /v1/events`
+- `GET /v1/events/{id}`
+- `GET /v1/instruments/{symbol}`
 - `GET /v1/evidence/{id}`
 - `GET /v1/decisions/{id}`
 - `GET /v1/paper/fills`

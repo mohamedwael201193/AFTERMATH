@@ -1,0 +1,284 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  /* ── AFTERMATH brand palette ─────────────────────────────── */
+  --color-forest: #086b32;
+  --color-forest-deep: #064d27;
+  --color-forest-ink: #04361c;
+  --color-forest-soft: #4c9a6a;
+  --color-forest-mist: #e3ecdf;
+  --color-paper: #f5f2e7;
+  --color-warmwhite: #fffef8;
+  --color-ink: #171916;
+  --color-ink-soft: #65695f;
+  --color-line: #d8d8ca;
+  --color-line-strong: #b9b9a6;
+  --color-warn: #9a6106;
+  --color-warn-soft: #f5e9d2;
+  --color-risk: #b3261e;
+  --color-risk-soft: #f6e3e0;
+  --color-hold: #65695f;
+  --color-hold-soft: #eceada;
+  --color-gold: #c9a227;
+
+  /* ── typography ──────────────────────────────────────────── */
+  --font-display: var(--font-archivo-black), "Archivo Black", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-editorial: var(--font-instrument-serif), ui-serif, Georgia, serif;
+
+  /* ── shadcn semantic mapping onto AFTERMATH palette ──────── */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 3px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 8px);
+  --radius-2xl: calc(var(--radius) + 16px);
+
+  /* ── motion ──────────────────────────────────────────────── */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --animate-marquee: marquee 42s linear infinite;
+  --animate-marquee-reverse: marquee-reverse 42s linear infinite;
+  --animate-orbit: orbit 26s linear infinite;
+  --animate-orbit-slow: orbit 44s linear infinite;
+  --animate-float-y: float-y 7s ease-in-out infinite;
+  --animate-float-y-soft: float-y 10s ease-in-out infinite;
+  --animate-blink-soft: blink-soft 5.5s ease-in-out infinite;
+  --animate-spin-slow: spin 14s linear infinite;
+  --animate-pulse-ring: pulse-ring 2.6s ease-out infinite;
+  --animate-dash-flow: dash-flow 1.6s linear infinite;
+}
+
+:root {
+  --radius: 1rem;
+  --background: #fffef8;
+  --foreground: #171916;
+  --card: #fffef8;
+  --card-foreground: #171916;
+  --popover: #fffef8;
+  --popover-foreground: #171916;
+  --primary: #086b32;
+  --primary-foreground: #fffef8;
+  --secondary: #f5f2e7;
+  --secondary-foreground: #171916;
+  --muted: #efecdd;
+  --muted-foreground: #65695f;
+  --accent: #e3ecdf;
+  --accent-foreground: #064d27;
+  --destructive: #b3261e;
+  --border: #d8d8ca;
+  --input: #d8d8ca;
+  --ring: #086b32;
+  --chart-1: #086b32;
+  --chart-2: #c9a227;
+  --chart-3: #9a6106;
+  --chart-4: #65695f;
+  --chart-5: #b3261e;
+}
+
+.dark {
+  --background: #064d27;
+  --foreground: #f5f2e7;
+  --card: #04361c;
+  --card-foreground: #f5f2e7;
+  --popover: #04361c;
+  --popover-foreground: #f5f2e7;
+  --primary: #f5f2e7;
+  --primary-foreground: #064d27;
+  --secondary: #0a5a2d;
+  --secondary-foreground: #f5f2e7;
+  --muted: #0a5a2d;
+  --muted-foreground: #b9c9b4;
+  --accent: #0a5a2d;
+  --accent-foreground: #f5f2e7;
+  --destructive: #e5837c;
+  --border: #0a5a2d;
+  --input: #0a5a2d;
+  --ring: #f5f2e7;
+}
+
+/* ── keyframes ─────────────────────────────────────────────── */
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+@keyframes marquee-reverse {
+  from { transform: translateX(-50%); }
+  to { transform: translateX(0); }
+}
+@keyframes orbit {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes float-y {
+  0%, 100% { transform: translateY(0) rotate(var(--tilt, 0deg)); }
+  50% { transform: translateY(-14px) rotate(var(--tilt, 0deg)); }
+}
+@keyframes blink-soft {
+  0%, 92%, 100% { transform: scaleY(1); }
+  95% { transform: scaleY(0.08); }
+}
+@keyframes pulse-ring {
+  0% { transform: scale(0.9); opacity: 0.7; }
+  70% { transform: scale(1.6); opacity: 0; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+@keyframes dash-flow {
+  to { stroke-dashoffset: -14; }
+}
+
+/* ── base ──────────────────────────────────────────────────── */
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: #086b32;
+  color: #fffef8;
+}
+
+/* Tabular numerals for all financial figures */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* ── paper grain texture ───────────────────────────────────── */
+.texture-paper {
+  position: relative;
+}
+.texture-paper::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  mix-blend-mode: multiply;
+  border-radius: inherit;
+}
+.texture-paper--deep::before {
+  opacity: 0.35;
+  mix-blend-mode: overlay;
+}
+
+/* ── sticker / display helpers ─────────────────────────────── */
+.sticker-shadow {
+  filter: drop-shadow(5px 6px 0 rgba(23, 25, 22, 0.9));
+}
+.sticker-shadow-sm {
+  filter: drop-shadow(3px 3px 0 rgba(23, 25, 22, 0.85));
+}
+.type-shadow {
+  text-shadow: 4px 4px 0 rgba(23, 25, 22, 0.92);
+}
+.type-shadow-soft {
+  text-shadow: 3px 3px 0 rgba(245, 242, 231, 0.9);
+}
+
+/* Hard outline display text */
+.text-ink-outline {
+  -webkit-text-stroke: 2px #171916;
+  paint-order: stroke fill;
+}
+
+/* ── custom scrollbar (long lists) ─────────────────────────── */
+.scroll-slim {
+  scrollbar-width: thin;
+  scrollbar-color: #b9b9a6 transparent;
+}
+.scroll-slim::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-slim::-webkit-scrollbar-thumb {
+  background: #c5c5b2;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.scroll-slim::-webkit-scrollbar-thumb:hover {
+  background: #a8a894;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.scroll-slim::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ── focus visibility ──────────────────────────────────────── */
+:where(a, button, [role="button"], input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid #086b32;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+.on-forest :where(a, button, [role="button"], input, select, textarea, [tabindex]):focus-visible {
+  outline-color: #f5f2e7;
+}
+
+/* ── reduced motion ────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Motion preference class toggled from settings (survives OS setting gaps) */
+.motion-off *,
+.motion-off *::before,
+.motion-off *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+/* ── marquee pause on hover / keyboard ─────────────────────── */
+.marquee-track:hover,
+.marquee-track:focus-within {
+  animation-play-state: paused;
+}
+
+/* Hide horizontal overflow from decorative absolutely-positioned art */
+.overflow-x-guard {
+  overflow-x: clip;
+}

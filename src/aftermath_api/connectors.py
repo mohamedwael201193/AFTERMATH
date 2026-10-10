@@ -11,7 +11,7 @@ VENDOR = ROOT / "third_party" / "aftermath"
 if str(VENDOR) not in sys.path:
     sys.path.insert(0, str(VENDOR))
 
-from FINAL_CANDIDATE.t2.marketdata import BitgetPublic  # noqa: E402
+from FINAL_CANDIDATE.t2.marketdata import BitgetPublic, book_from_depth  # noqa: E402
 
 from .errors import ApiError
 
@@ -63,6 +63,53 @@ def interpret_mcp(payload: dict) -> dict:
     return payload
 
 
+def observation_from_depth(rec: dict, *, now: datetime | None = None, max_age_s: float = 60.0) -> dict:
+    try:
+        book = book_from_depth(rec)
+        bids = book["bids"]
+        asks = book["asks"]
+        bid, _bid_size = bids[0]
+        ask, _ask_size = asks[0]
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise ApiError("SOURCE_UNAVAILABLE", "depth payload empty", 503, retryable=True) from exc
+    if not _finite_positive(bid) or not _finite_positive(ask) or ask <= bid:
+        raise ApiError("SCHEMA", "depth quotes invalid", 422)
+    mid = (bid + ask) / 2
+    spread_bp = (ask - bid) / mid * 1e4
+    depth_usdt = 0.0
+    for price, size in list(bids) + list(asks):
+        if not _finite_positive(price) or not _finite_positive(size):
+            continue
+        if abs(price - mid) / mid * 1e4 <= 25:
+            depth_usdt += price * size
+    age = _age_seconds(rec["fetched_at_utc"], now)
+    if age > max_age_s:
+        raise ApiError("STALE", "depth older than 60 seconds", 409)
+    return {
+        "source": "bitget-rest",
+        "endpoint": rec["endpoint"],
+        "instrument_id": rec["params"]["symbol"],
+        "event_type": "book",
+        "event_time_utc": rec["fetched_at_utc"],
+        "fetched_at_utc": rec["fetched_at_utc"],
+        "payload": {
+            "bid": bid,
+            "ask": ask,
+            "mid": mid,
+            "spread_bp": round(spread_bp, 4),
+            "depth_usdt": round(depth_usdt, 2),
+            "bids": bids[:5],
+            "asks": asks[:5],
+            "raw_sha256": rec["sha256"],
+        },
+        "mapping_confidence": 1.0,
+    }
+
+
+def _finite_positive(value: float) -> bool:
+    return value == value and value not in (float("inf"), float("-inf")) and value > 0
+
+
 class BitgetConnector:
     def __init__(self, cache_dir: Path, mode: str = "live", fetch=None):
         self.client = BitgetPublic(cache_dir, mode=mode, fetch=fetch)
@@ -75,3 +122,12 @@ class BitgetConnector:
         except Exception as exc:
             raise ApiError("SOURCE_UNAVAILABLE", "bitget ticker failed", 503, retryable=True) from exc
         return observation_from_ticker(rec)
+
+    def depth(self, symbol: str) -> dict:
+        if symbol.startswith("fixture:"):
+            raise ApiError("SCHEMA", "fixture instruments are refused", 422)
+        try:
+            rec = self.client.depth(symbol, limit="15")
+        except Exception as exc:
+            raise ApiError("SOURCE_UNAVAILABLE", "bitget depth failed", 503, retryable=True) from exc
+        return observation_from_depth(rec)

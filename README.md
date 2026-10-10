@@ -19,7 +19,9 @@ If the model key is absent, the process still starts and `POST /v1/decisions` re
 
 SEC live requests stay off until `T2_SEC_USER_AGENT` is a real contact string.
 
-The frontend is not in this repository. It will be supplied separately and must not receive the decision token, job token, model key, signing key, or database URL.
+The frontend lives in `frontend/` and is a Next.js application. Its dashboard reads the API through `/api/read`, which forwards only the reader allowlist and attaches the reader token on the server. The landing preview is labeled sample data and is not the ledger. `GET /v1/metrics` remains `INSUFFICIENT_DATA` until graded paper outcomes exist.
+
+The paper cycle fetches Bitget public order books. A usable book without a qualifying filing or news event records `ABSTAIN` / `no_qualifying_event`. A missing book, a spread above 12 bp, or depth below 1000 USDT inside 25 bp records that specific refusal. The cycle does not call the model and does not create a fill. SEC requests stay off until `T2_SEC_USER_AGENT` is a real contact string. There is no project `LICENSE` file.
 
 `POST /internal/jobs/paper-cycle` fetches the whitelisted Bitget tickers when it is invoked outside the test environment. A ticker without an order book is stored as evidence and the cycle records `ABSTAIN` / `missing_order_book`. It does not call the model and it does not create a paper fill. The same UTC hour is idempotent. GitHub Actions calls that route hourly when `AFTERMATH_JOB_TOKEN` is configured. A failed cycle fails the workflow; an empty or failed fetch is `source_unavailable`, not a trade.
 

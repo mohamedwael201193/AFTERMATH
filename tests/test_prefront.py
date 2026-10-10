@@ -185,6 +185,28 @@ def test_reader_rate_limit_and_database_ping_failure(tmp_path):
     assert ready.json()["problems"] == ["database"]
 
 
+def test_book_quality_changes_the_refusal_and_does_not_trade():
+    from aftermath_api.cycle import cycle_reason
+    from aftermath_api.connectors import observation_from_depth
+
+    now = datetime.now(timezone.utc).isoformat()
+    usable = observation_from_depth({
+        "endpoint": "/api/v2/mix/market/merge-depth",
+        "params": {"symbol": "NVDAUSDT"},
+        "fetched_at_utc": now,
+        "sha256": "abc",
+        "data": {"bids": [["100", "20"]], "asks": [["100.05", "20"]], "ts": "1"},
+    })
+    assert usable["event_type"] == "book"
+    assert cycle_reason([usable]) == "no_qualifying_event"
+    wide = {**usable, "payload": {**usable["payload"], "spread_bp": 40, "depth_usdt": 5000}}
+    thin = {**usable, "payload": {**usable["payload"], "spread_bp": 2, "depth_usdt": 10}}
+    ticker = {**usable, "event_type": "ticker"}
+    assert cycle_reason([wide]) == "spread_too_wide"
+    assert cycle_reason([thin]) == "insufficient_depth"
+    assert cycle_reason([ticker]) == "missing_order_book"
+
+
 def test_whitelist_matches_the_vendored_governor():
     import sys
 

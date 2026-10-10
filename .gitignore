@@ -39,9 +39,23 @@ __pycache__/
 venv/
 *.egg-info/
 
-# Supplied later. Do not publish it from this repository until integration.
-/frontend/
-/FRONTEND/
+
+
+# Frontend secrets, installs, and local artifacts. Source is tracked.
+frontend/.env
+frontend/.env.*
+frontend/node_modules/
+frontend/.next/
+frontend/.git/
+frontend/dev.log
+frontend/server.log
+frontend/screenshots/
+frontend/tool-results/
+frontend/worklog.md
+frontend/db/
+frontend/upload/
+frontend/download/
+frontend/screensheets_placeholder
 
 # Node / frontend build output (integration phase only)
 node_modules/
