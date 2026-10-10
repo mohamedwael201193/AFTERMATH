@@ -122,6 +122,8 @@ def test_cycle_records_live_shape_refusal_without_a_fill(tmp_path):
     assert store.latest_run()["detail"]["model_calls"] == 0
     status = http.get("/v1/ops/status", headers={"Authorization": "Bearer reader-token"})
     assert status.json()["latest_run"]["reason"] == "missing_order_book"
+    assert status.json()["decision_count"] == 1
+    assert status.json()["event_count"] >= 1
     metrics = http.get("/v1/metrics", headers={"Authorization": "Bearer reader-token"})
     assert metrics.json()["status"] == "INSUFFICIENT_DATA"
     assert metrics.json()["sample_size"] == 0

@@ -111,6 +111,12 @@ class MemoryStore:
             self.decision_evidence.append(dict(link))
         return self.decisions[row["id"]]
 
+    def count_decisions(self) -> int:
+        return len(self.decisions)
+
+    def count_events(self) -> int:
+        return len(self.events)
+
     def get_decision(self, did: str) -> dict | None:
         row = self.decisions.get(did)
         if not row:
@@ -374,6 +380,16 @@ class PostgresStore:
             "created_at_utc": _iso(row[8]),
             "evidence_ids": [x[0] for x in links],
         }
+
+    def count_decisions(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute(f"SELECT COUNT(*) FROM {self.schema}.decisions").fetchone()
+        return int(row[0])
+
+    def count_events(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute(f"SELECT COUNT(*) FROM {self.schema}.events").fetchone()
+        return int(row[0])
 
     def model_calls_on_day(self, day: str) -> int:
         with self._connect() as conn:

@@ -23,6 +23,7 @@ export interface CycleSnapshot {
   status: string | null;
   stale: boolean;
   evaluationStatus: string | null;
+  eventCount: number | null;
 }
 
 const NAMES: Record<string, string> = {
@@ -116,11 +117,13 @@ function anchorUnconfirmed(status?: string): boolean {
 function cycleFromOps(ops: {
   latest_run?: { status?: string; reason?: string; decision_id?: string; receipt_id?: string; finished_at_utc?: string; started_at_utc?: string };
   fill_count?: number;
+  decision_count?: number;
+  event_count?: number;
   stale?: boolean;
 }): CycleSnapshot {
   const latest = ops.latest_run;
   return {
-    decisionCount: latest?.decision_id ? 1 : 0,
+    decisionCount: typeof ops.decision_count === "number" ? ops.decision_count : latest?.decision_id ? 1 : 0,
     refusalCount: latest?.status === "refused" ? 1 : 0,
     fillCount: typeof ops.fill_count === "number" ? ops.fill_count : 0,
     reason: latest?.reason || null,
@@ -130,6 +133,7 @@ function cycleFromOps(ops: {
     status: latest?.status || null,
     stale: ops.stale === true,
     evaluationStatus: null,
+    eventCount: typeof ops.event_count === "number" ? ops.event_count : null,
   };
 }
 
@@ -141,7 +145,7 @@ function activityFromCycle(cycle: CycleSnapshot): ActivityRecord[] {
     headline: `Paper cycle ${cycle.status || "recorded"}: ${cycle.reason || "no reason"}`,
     decisionState: "NO ACTION",
     riskOutcome: cycle.status === "approved" ? "APPROVED" : "REFUSED",
-    execution: cycle.fillCount > 0 ? "FILLED" : cycle.status === "refused" ? "REFUSED" : "NONE",
+    execution: cycle.fillCount > 0 ? "FILLED" : cycle.reason === "no_qualifying_event" ? "NONE" : cycle.status === "refused" ? "REFUSED" : "NONE",
     occurredAt: cycle.occurredAt,
     sourceKind: "EXCHANGE_FEED",
     receiptDigest: cycle.receiptId,

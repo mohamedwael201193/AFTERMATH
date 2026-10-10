@@ -12,29 +12,6 @@ import type { CycleStatus } from "@/components/dashboard/useDashboardData";
 import { useDashboardStore } from "@/lib/dashboardStore";
 import { cn } from "@/lib/utils";
 
-const SUMMARY = [
-  {
-    icon: Zap,
-    label: "Events in window",
-    hint: "detected in the last ~36 hours",
-  },
-  {
-    icon: BarChart3,
-    label: "Decisions recorded",
-    hint: "every one auditable",
-  },
-  {
-    icon: Activity,
-    label: "Paper fills",
-    hint: "with estimated costs",
-  },
-  {
-    icon: ShieldCheck,
-    label: "Risk blocks",
-    hint: "refusals as designed",
-  },
-] as const;
-
 function SummaryCard({
   icon: Icon,
   label,
@@ -60,42 +37,6 @@ function SummaryCard({
       <p className="mt-1.5 text-xs font-semibold text-ink-soft">{hint}</p>
       {detail && <div className="mt-auto pt-3">{detail}</div>}
     </article>
-  );
-}
-
-/** Decision-state distribution bar (never color-only — labeled below). */
-function DistributionBar({ events }: { events: MarketEvent[] }) {
-  const counts = events.reduce<Record<string, number>>((acc, e) => {
-    acc[e.decisionState] = (acc[e.decisionState] ?? 0) + 1;
-    return acc;
-  }, {});
-  const order = ["PROCEED", "REDUCE", "WAIT", "REJECT", "NO ACTION"] as const;
-  const tones: Record<string, string> = {
-    PROCEED: "bg-forest",
-    REDUCE: "bg-warn",
-    WAIT: "bg-ink",
-    REJECT: "bg-risk",
-    "NO ACTION": "bg-hold",
-  };
-  const total = events.length || 1;
-  return (
-    <div>
-      <div className="flex h-3 overflow-hidden rounded-full border-2 border-ink bg-paper" aria-hidden="true">
-        {order.map((k) =>
-          counts[k] ? (
-            <div key={k} className={cn(tones[k])} style={{ width: `${(counts[k] / total) * 100}%` }} />
-          ) : null
-        )}
-      </div>
-      <ul className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1">
-        {order.map((k) => (
-          <li key={k} className="flex items-center gap-1.5 whitespace-nowrap text-[10px] font-bold text-ink-soft">
-            <span className={cn("h-2 w-2 shrink-0 rounded-full border border-ink", tones[k])} aria-hidden="true" />
-            {k} · {counts[k] ?? 0}
-          </li>
-        ))}
-      </ul>
-    </div>
   );
 }
 
@@ -125,13 +66,12 @@ export function OverviewPanel({
       <div className="grid grid-cols-1 gap-4 [scroll-margin-top:5rem] @min-[28rem]:grid-cols-2 @min-[60rem]:grid-cols-4">
         <SummaryCard
           icon={Zap}
-          label="Events in window"
-          value={String(events.length)}
-          hint={`latest ${events[0] ? relativeToNow(events[0].occurredAt) : "—"}`}
+          label="Stored books"
+          value={String(cycle?.eventCount ?? events.length)}
+          hint="order books, not filings or decisions"
           detail={
             <p className="text-[11px] font-semibold text-ink-soft">
-              {events.filter((e) => e.status === "REVIEWING").length} reviewing ·{" "}
-              {events.filter((e) => e.status === "RESOLVED").length} resolved
+              {observations.length} symbols · latest {events[0] ? relativeToNow(events[0].occurredAt) : "—"}
             </p>
           }
         />
@@ -140,7 +80,11 @@ export function OverviewPanel({
           label="Decisions recorded"
           value={String(cycle?.decisionCount ?? 0)}
           hint="paper-cycle decisions, not one per symbol"
-          detail={<DistributionBar events={activity.map((row) => ({ decisionState: row.decisionState } as MarketEvent))} />}
+          detail={
+            <p className="text-[11px] font-semibold text-ink-soft">
+              Latest cycle: {cycle?.reason || "none"}. This bar is not a catalogue of symbol decisions.
+            </p>
+          }
         />
         <SummaryCard
           icon={Activity}
