@@ -1,0 +1,7 @@
+{
+ "alg": "ed25519",
+ "key_id": "ed25519:45e4334c577525fa",
+ "public_hex": "db04bca35636e89385037924e48936f5a0be6189616fe8b0ed29ea4be1e81c1a",
+ "created_at_utc": "2026-10-09T22:23:50+00:00",
+ "private_key": "kept outside git (T2_SIGNING_KEY or ~/.config/side_agent_b/), mode 0600"
+}

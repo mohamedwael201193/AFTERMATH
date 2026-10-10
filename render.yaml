@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: aftermath-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    preDeployCommand: python -m aftermath_api.migrate
+    startCommand: python -m aftermath_api
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.14.3
+      - key: AFTERMATH_ENV
+        value: prod
+      - key: PYTHONPATH
+        value: src
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: AFTERMATH_API_TOKEN
+        sync: false
+      - key: AFTERMATH_DECISION_TOKEN
+        sync: false
+      - key: AFTERMATH_JOB_TOKEN
+        sync: false
+      - key: T2_LLM_API_KEY
+        sync: false
+      - key: T2_LLM_BASE_URL
+        sync: false
+      - key: T2_LLM_MODEL
+        sync: false
+      - key: T2_SIGNING_KEY
+        value: /etc/secrets/production_ed25519.key
+      - key: AFTERMATH_WEB_ORIGIN
+        sync: false

@@ -1,0 +1,13 @@
+{
+  "fixture": true,
+  "id": "dec_example",
+  "status": "ABSTAIN",
+  "decision_source": "abstain",
+  "reason": "llm_unconfigured",
+  "prompt_hash": "abc",
+  "input_snapshot_hash": "def",
+  "schema_version": 1,
+  "evidence_ids": ["ev_example"],
+  "source": "fixture",
+  "created_at_utc": "2026-10-10T00:00:00+00:00"
+}

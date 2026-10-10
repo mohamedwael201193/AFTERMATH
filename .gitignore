@@ -1,0 +1,56 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+keys/*
+!keys/*.pub
+
+# Private research, handoff, and planning notes that must not enter a public repo
+HISTORY/
+HANDOFF*
+WORKLOG.md
+IMPLEMENTATION_LEDGER.md
+*_PRIVATE.md
+EXECUTION_PLAN.md
+PLAN_VALIDATION_REPORT.md
+PLAN_INPUT_INVENTORY.md
+evidence/
+
+# Generated data, caches, logs, and test artifacts
+data/
+cache/
+artifacts/
+results/
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Node / frontend build output (integration phase only)
+node_modules/
+.next/
+.vercel/
+dist/
+build/
+
+# Cloned research history. It is its own git repo. Never copy it into a public production repo.
+/upstream/
+
+# Editor and OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
