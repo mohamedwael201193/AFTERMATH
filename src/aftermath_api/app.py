@@ -17,7 +17,10 @@ from fastapi.responses import JSONResponse
 
 from .auth import require_decision, require_job, require_reader
 from .config import ROOT, Settings, load_settings
+from .cycle import run_paper_cycle
+from .decide import abstain
 from .errors import ApiError, error_body, install_errors
+from .gate import core_blockers, has_order_book
 from .identity import accept_mapping, resolve_symbol
 from .ids import SCHEMA_VERSION, event_id, evidence_id, payload_hash, utc_now
 from .paper import govern, paper_fill
@@ -87,6 +90,10 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
     @app.middleware("http")
     async def _log(request: Request, call_next):
         response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Cache-Control"] = "no-store"
         log.info(json.dumps({"path": request.url.path, "status": response.status_code}))
         return response
 
@@ -176,15 +183,67 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
         return row
 
     @app.post("/v1/receipts/{receipt_id}/verify")
-    def verify(receipt_id: str, request: Request):
+    async def verify(receipt_id: str, request: Request):
+        reader(request)
+        row = store.get_receipt(receipt_id)
+        if not row:
+            raise ApiError("SCHEMA", "receipt not found", 404)
+        pub = _public_key(settings)
+        supplied = None
+        if request.headers.get("content-type", "").startswith("application/json"):
+            raw = await request.body()
+            if raw:
+                try:
+                    supplied = json.loads(raw).get("line")
+                except json.JSONDecodeError as exc:
+                    raise ApiError("SCHEMA", "verify body is not json", 422) from exc
+        if supplied is not None:
+            ok = bool(pub and verify_line(pub, supplied) and supplied.get("line_hash") == row["line"]["line_hash"])
+            return {"id": receipt_id, "verified": ok, "ots_status": row["ots_status"], "checked": "supplied_copy"}
+        lines = store.list_ledger()
+        ok = bool(pub and chain_intact(pub, lines) and any(line["line_hash"] == row["line"]["line_hash"] for line in lines))
+        return {"id": receipt_id, "verified": ok, "ots_status": row["ots_status"], "checked": "stored"}
+
+    @app.post("/v1/receipts/{receipt_id}/replay")
+    def replay(receipt_id: str, request: Request):
         reader(request)
         row = store.get_receipt(receipt_id)
         if not row:
             raise ApiError("SCHEMA", "receipt not found", 404)
         pub = _public_key(settings)
         lines = store.list_ledger()
-        ok = bool(pub and chain_intact(pub, lines) and any(line["line_hash"] == row["line"]["line_hash"] for line in lines))
-        return {"id": receipt_id, "verified": ok, "ots_status": row["ots_status"]}
+        signature_ok = bool(pub and verify_line(pub, row["line"]))
+        chain_ok = bool(pub and chain_intact(pub, lines))
+        return {
+            "id": receipt_id,
+            "signature_ok": signature_ok,
+            "chain_ok": chain_ok,
+            "ots_status": row["ots_status"],
+            "anchor": "unconfirmed" if row["ots_status"] == "pending" else row["ots_status"],
+            "llm_reproduction": "not_available",
+            "deterministic_checks": ["signature", "hash_chain"],
+        }
+
+    @app.get("/v1/ops/status")
+    def ops_status(request: Request):
+        reader(request)
+        run = store.latest_run()
+        return {"latest_run": run, "scheduler": "external_hourly_post", "paper_only": True}
+
+    @app.get("/v1/metrics")
+    def metrics(request: Request):
+        reader(request)
+        fills = store.list_fills()
+        graded = [row for row in fills if (row.get("cost_json") or {}).get("outcome_bp") is not None]
+        if not graded:
+            return {
+                "status": "INSUFFICIENT_DATA",
+                "sample_size": 0,
+                "window": None,
+                "calculation_version": 1,
+                "note": "No graded paper outcomes are stored on this service.",
+            }
+        return {"status": "RECORDED", "sample_size": len(graded), "window": None, "calculation_version": 1}
 
     @app.post("/v1/decisions")
     async def decisions(request: Request):
@@ -194,6 +253,13 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
         key = request.headers.get("idempotency-key")
         if not key:
             raise ApiError("SCHEMA", "Idempotency-Key required", 422)
+        prior_id = store.decision_for_key(key)
+        if prior_id:
+            return {
+                "decision": store.get_decision(prior_id),
+                "fill": store.fill_for_key(key),
+                "receipt": store.receipt_for_decision(prior_id),
+            }
         body = await request.json()
         ids = body.get("evidence_ids")
         if not isinstance(ids, list) or not ids:
@@ -210,10 +276,25 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
             loaded.append({"id": ev["id"], "payload_hash": ev["payload_hash"], "facts": event["payload"], "event": event})
         from .decide import decide
 
-        decider = getattr(app.state, "decider", decide)
-        result = decider(settings, loaded)
-        if any(ev["event"].get("conflict") for ev in loaded):
-            result = {**result, "status": "ABSTAIN", "decision_source": "abstain", "reason": "conflict", "proposal": None}
+        events = [ev["event"] for ev in loaded]
+        blocker = core_blockers(events)
+        calls = getattr(app.state, "decider_calls", None)
+        if blocker:
+            rows = [(ev["id"], ev["payload_hash"]) for ev in loaded]
+            result = abstain(blocker, rows)
+        elif not settings.llm_configured:
+            decider = getattr(app.state, "decider", decide)
+            if calls is not None:
+                calls.append("decider")
+            result = decider(settings, loaded)
+        elif not has_order_book(events):
+            rows = [(ev["id"], ev["payload_hash"]) for ev in loaded]
+            result = abstain("missing_order_book", rows)
+        else:
+            decider = getattr(app.state, "decider", decide)
+            if calls is not None:
+                calls.append("decider")
+            result = decider(settings, loaded)
         now = utc_now()
         did = "dec_" + uuid.uuid4().hex[:24]
         row = {
@@ -230,10 +311,9 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
         links = [{"decision_id": did, "evidence_id": eid, "position": i} for i, eid in enumerate(ids)]
         if body.get("input_snapshot_hash") and body["input_snapshot_hash"] != result["input_snapshot_hash"]:
             raise ApiError("SCHEMA", "input_snapshot_hash mismatch", 422)
-        prior = store.decision_for_key(key)
         saved = store.insert_decision(row, links)
         fill = None
-        receipt = store.receipt_for_decision(saved["id"]) if prior else None
+        receipt = None
         if result["status"] == "PAPER_PROPOSED" and result.get("proposal"):
             ctx = body.get("risk_context") or {}
             verdict = govern(result["proposal"], ctx)
@@ -259,40 +339,29 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
                     "created_at_utc": now,
                 })
                 saved = store.update_decision(saved["id"], status=walk["status"])
-        if prior is None and _signing_ready(settings):
-            final = store.get_decision(saved["id"])
-            receipt = issue_receipt(store, Path(settings.signing_key_path), {
-                "decision_id": final["id"],
-                "status": final["status"],
-                "input_snapshot_hash": final["input_snapshot_hash"],
-                "evidence_ids": final["evidence_ids"],
-            })
+        if _signing_ready(settings):
+            try:
+                final = store.get_decision(saved["id"])
+                receipt = issue_receipt(store, Path(settings.signing_key_path), {
+                    "decision_id": final["id"],
+                    "status": final["status"],
+                    "reason": final["reason"],
+                    "input_snapshot_hash": final["input_snapshot_hash"],
+                    "evidence_ids": final["evidence_ids"],
+                    "prompt_hash": final["prompt_hash"],
+                    "model": settings.llm_model if result["decision_source"] == "model" else "absent",
+                })
+            except Exception:
+                if store.receipt_for_decision(saved["id"]) is None:
+                    store.abandon_unsigned(saved["id"])
+                raise ApiError("SOURCE_UNAVAILABLE", "signing failed", 503)
         return {"decision": store.get_decision(saved["id"]), "fill": fill, "receipt": receipt}
 
     @app.post("/internal/jobs/paper-cycle")
     def paper_cycle(request: Request):
         require_job(settings, request.headers.get("authorization"))
-        hour = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H")
-        key = f"paper-cycle:{hour}"
-        existing = store.decision_for_key(key)
-        if existing:
-            return {"idempotency_key": key, "decision_id": existing, "repeated": True}
-        from .decide import abstain
-
-        result = abstain("scheduled_no_new_evidence", [])
-        did = "dec_" + uuid.uuid4().hex[:24]
-        store.insert_decision({
-            "id": did,
-            "status": result["status"],
-            "decision_source": result["decision_source"],
-            "prompt_hash": result["prompt_hash"],
-            "input_snapshot_hash": result["input_snapshot_hash"],
-            "schema_version": SCHEMA_VERSION,
-            "reason": result["reason"],
-            "idempotency_key": key,
-            "created_at_utc": utc_now(),
-        }, [])
-        return {"idempotency_key": key, "decision_id": did, "repeated": False}
+        fetcher = getattr(app.state, "cycle_fetch", None)
+        return run_paper_cycle(settings, store, fetch=fetcher, signing_path=settings.signing_key_path)
 
     @app.post("/v1/events")
     async def ingest(request: Request):

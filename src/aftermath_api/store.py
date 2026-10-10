@@ -19,6 +19,7 @@ class MemoryStore:
     idempotency: dict = field(default_factory=dict)
     ledger: list = field(default_factory=list)
     receipts: dict = field(default_factory=dict)
+    runs: dict = field(default_factory=dict)
 
     def insert_event(self, row: dict) -> dict:
         if row["id"] in self.events:
@@ -91,6 +92,30 @@ class MemoryStore:
             return self.fills[key]
         self.fills[key] = dict(row)
         return self.fills[key]
+
+    def fill_for_key(self, key: str) -> dict | None:
+        return self.fills.get(key)
+
+    def abandon_unsigned(self, decision_id: str) -> None:
+        if self.receipt_for_decision(decision_id):
+            return
+        row = self.decisions.pop(decision_id, None)
+        if row and row.get("idempotency_key"):
+            self.idempotency.pop(row["idempotency_key"], None)
+            self.fills.pop(row["idempotency_key"], None)
+        self.decision_evidence = [item for item in self.decision_evidence if item["decision_id"] != decision_id]
+
+    def insert_run(self, row: dict) -> dict:
+        key = row["idempotency_key"]
+        if key in self.runs:
+            return self.runs[key]
+        self.runs[key] = dict(row)
+        return self.runs[key]
+
+    def latest_run(self) -> dict | None:
+        if not self.runs:
+            return None
+        return sorted(self.runs.values(), key=lambda item: item["started_at_utc"])[-1]
 
     def list_fills(self) -> list:
         return list(self.fills.values())
@@ -293,6 +318,53 @@ class PostgresStore:
             rows = conn.execute(f"SELECT id, decision_id, idempotency_key, status, cost_json, created_at_utc FROM {self.schema}.paper_fills").fetchall()
         return [_fill_row(r) for r in rows]
 
+    def fill_for_key(self, key: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT id, decision_id, idempotency_key, status, cost_json, created_at_utc FROM {self.schema}.paper_fills WHERE idempotency_key = %s",
+                (key,),
+            ).fetchone()
+        return _fill_row(row) if row else None
+
+    def abandon_unsigned(self, decision_id: str) -> None:
+        with self._connect() as conn:
+            existing = conn.execute(
+                f"SELECT r.id FROM {self.schema}.receipts r JOIN {self.schema}.ledger_lines l ON l.seq = r.ledger_seq WHERE l.body->>'decision_id' = %s",
+                (decision_id,),
+            ).fetchone()
+            if existing:
+                return
+            conn.execute(f"DELETE FROM {self.schema}.paper_fills WHERE decision_id = %s", (decision_id,))
+            conn.execute(f"DELETE FROM {self.schema}.decision_evidence WHERE decision_id = %s", (decision_id,))
+            conn.execute(f"DELETE FROM {self.schema}.decisions WHERE id = %s", (decision_id,))
+            conn.commit()
+
+    def insert_run(self, row: dict) -> dict:
+        from psycopg.types.json import Json
+
+        with self._connect() as conn:
+            existing = conn.execute(
+                f"SELECT id, idempotency_key, status, reason, decision_id, started_at_utc, finished_at_utc, detail FROM {self.schema}.paper_runs WHERE idempotency_key = %s",
+                (row["idempotency_key"],),
+            ).fetchone()
+            if existing:
+                return _run_row(existing)
+            conn.execute(
+                f"""INSERT INTO {self.schema}.paper_runs
+                (id, idempotency_key, status, reason, decision_id, started_at_utc, finished_at_utc, detail)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                (row["id"], row["idempotency_key"], row["status"], row["reason"], row["decision_id"], row["started_at_utc"], row["finished_at_utc"], Json(row["detail"])),
+            )
+            conn.commit()
+        return row
+
+    def latest_run(self) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT id, idempotency_key, status, reason, decision_id, started_at_utc, finished_at_utc, detail FROM {self.schema}.paper_runs ORDER BY started_at_utc DESC LIMIT 1"
+            ).fetchone()
+        return _run_row(row) if row else None
+
     def append_ledger(self, row: dict) -> dict:
         from psycopg.types.json import Json
 
@@ -378,3 +450,16 @@ def _event_row(row) -> dict:
 
 def _fill_row(row) -> dict:
     return {"id": row[0], "decision_id": row[1], "idempotency_key": row[2], "status": row[3], "cost_json": row[4], "created_at_utc": _iso(row[5])}
+
+
+def _run_row(row) -> dict:
+    return {
+        "id": row[0],
+        "idempotency_key": row[1],
+        "status": row[2],
+        "reason": row[3],
+        "decision_id": row[4],
+        "started_at_utc": _iso(row[5]),
+        "finished_at_utc": _iso(row[6]) if row[6] else None,
+        "detail": row[7],
+    }

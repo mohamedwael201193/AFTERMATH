@@ -16,6 +16,7 @@ if str(VENDOR) not in sys.path:
 from FINAL_CANDIDATE.components.numnorm import Fact, check_text  # noqa: E402
 
 from .config import Settings
+from .gate import core_blockers, has_order_book
 from .ids import SCHEMA_VERSION, snapshot_hash
 
 PROMPT = (Path(__file__).resolve().parents[2] / "prompts" / "decision_v1.txt").read_text(encoding="utf-8")
@@ -69,8 +70,15 @@ def decide(settings: Settings, evidence_rows: list[dict], transport=None) -> dic
     rows = [(r["id"], r["payload_hash"]) for r in evidence_rows]
     if not evidence_rows:
         return abstain("insufficient_evidence", rows)
+    events = [r["event"] for r in evidence_rows if isinstance(r.get("event"), dict)]
+    if events:
+        blocker = core_blockers(events)
+        if blocker:
+            return abstain(blocker, rows)
     if not settings.llm_configured:
         return abstain("llm_unconfigured", rows)
+    if events and not has_order_book(events):
+        return abstain("missing_order_book", rows)
     try:
         text = call_model(settings, evidence_rows, transport)
     except Exception:

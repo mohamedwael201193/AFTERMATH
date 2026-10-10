@@ -1,0 +1,22 @@
+name: paper-cycle
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+jobs:
+  cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Record one paper cycle
+        env:
+          AFTERMATH_JOB_TOKEN: ${{ secrets.AFTERMATH_JOB_TOKEN }}
+        run: |
+          code=$(curl -sS -o "$RUNNER_TEMP/cycle.json" -w "%{http_code}" -X POST \
+            -H "Authorization: Bearer $AFTERMATH_JOB_TOKEN" \
+            --retry 4 --retry-all-errors --retry-delay 15 \
+            https://aftermath-api.onrender.com/internal/jobs/paper-cycle)
+          python -c "import json,os; d=json.load(open(os.environ['RUNNER_TEMP']+'/cycle.json')); print(d.get('reason'), d.get('repeated'))"
+          test "$code" = "200"

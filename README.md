@@ -20,3 +20,11 @@ If the model key is absent, the process still starts and `POST /v1/decisions` re
 SEC live requests stay off until `T2_SEC_USER_AGENT` is a real contact string.
 
 The frontend is not in this repository. It will be supplied separately and must not receive the decision token, job token, model key, signing key, or database URL.
+
+`POST /internal/jobs/paper-cycle` fetches the whitelisted Bitget tickers when it is invoked outside the test environment. A ticker without an order book is stored as evidence and the cycle records `ABSTAIN` / `missing_order_book`. It does not call the model and it does not create a paper fill. The same UTC hour is idempotent. GitHub Actions calls that route hourly when `AFTERMATH_JOB_TOKEN` is configured. A failed cycle fails the workflow; an empty or failed fetch is `source_unavailable`, not a trade.
+
+`GET /v1/metrics` returns `INSUFFICIENT_DATA` until graded paper outcomes exist. This service does not publish a profitability score. `GET /v1/ops/status` shows the latest cycle. Receipt `ots_status=pending` means the OpenTimestamps anchor is not confirmed.
+
+No license file is present for this project's own code. Public visibility is not a license grant. Vendored research code keeps its `NOTICE`.
+
+Tests: `pytest -q` runs the offline suite. Live Bitget and Postgres tests are marked and are not part of that default command.

@@ -6,14 +6,15 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-MIGRATION = ROOT / "migrations" / "0001_init.sql"
+MIGRATIONS = sorted((ROOT / "migrations").glob("*.sql"))
 
 
 def apply_migration(conn, schema: str = "aftermath") -> None:
     if not schema.replace("_", "").isalnum():
         raise ValueError("schema name")
-    sql = MIGRATION.read_text(encoding="utf-8").replace("aftermath", schema)
-    conn.execute(sql)
+    for path in MIGRATIONS:
+        sql = path.read_text(encoding="utf-8").replace("aftermath", schema)
+        conn.execute(sql)
     conn.commit()
 
 
