@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from ..connectors import require_sec_user_agent
 
 MAX_EVENT_AGE = timedelta(minutes=360)
+EXCERPT_LIMIT = 480
 COUNTED_ITEMS = {"2.02"}
 SHADOW_ITEMS = {"7.01", "8.01"}
 
@@ -37,8 +38,31 @@ def fetch_filings(user_agent: str, transport, fetched_at: str, now: datetime | N
         response = transport(url, {"User-Agent": user_agent, "Accept": "application/json"})
         payload = response if isinstance(response, dict) else json.loads(response)
         found.extend(select_filings(symbol, payload, fetched_at, now=now, seen=seen))
-    found.sort(key=lambda row: row["event_time_utc"])
-    return found
+    attached = []
+    for row in found:
+        if not (row.get("payload") or {}).get("counted"):
+            attached.append(row)
+            continue
+        url = (row.get("payload") or {}).get("source_url")
+        try:
+            body = transport(url, {"User-Agent": user_agent, "Accept": "text/html"}) if url else None
+        except Exception:
+            attached.append(row)
+            continue
+        attached.append(attach_document(row, body) if isinstance(body, str) else row)
+    attached.sort(key=lambda row: row["event_time_utc"])
+    return attached
+
+
+def attach_document(filing: dict, body: str) -> dict:
+    """Bind a fetched filing body. The excerpt is evidence, not an instruction."""
+    if not isinstance(body, str) or not body.strip():
+        return filing
+    payload = dict(filing.get("payload") or {})
+    payload["document_sha256"] = hashlib.sha256(body.encode()).hexdigest()
+    payload["excerpt"] = body[:EXCERPT_LIMIT]
+    payload["excerpt_untrusted"] = True
+    return {**filing, "payload": payload}
 
 
 def filing_from_submissions(symbol: str, payload: dict, fetched_at: str, now: datetime | None = None) -> dict | None:

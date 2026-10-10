@@ -5,14 +5,16 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timedelta, timezone
 
-from .execution_context import derive_execution
+from .execution_context import PAPER_EQUITY, derive_execution
 from .paper import paper_fill
 
 MIN_CLOSED = 30
 FALLBACK_FUNDING_8H = 0.0001
+PENDING_TTL = timedelta(hours=2)
 
 
-def portfolio_state(store) -> dict:
+def portfolio_state(store, now: datetime | None = None) -> dict:
+    now = now or datetime.now(timezone.utc)
     fills = store.list_fills()
     open_rows = [row for row in fills if row.get("status") in ("PENDING_ENTRY", "PAPER_FILLED")]
     symbols = []
@@ -27,13 +29,42 @@ def portfolio_state(store) -> dict:
             gross += float(entry.get("filled_usdt") or cost.get("notional") or 0)
         except (TypeError, ValueError):
             continue
+    closed = []
+    for row in fills:
+        if row.get("status") != "CLOSED":
+            continue
+        cost = row.get("cost_json") or {}
+        try:
+            net = float(cost["net_usdt"])
+        except (KeyError, TypeError, ValueError):
+            return _exposure(gross, open_rows, symbols, None, None, {})
+        closed.append((str(cost.get("closed_at") or ""), str(cost.get("symbol") or ""), net))
+    closed.sort()
+    path = 0.0
+    peak = 0.0
+    worst = 0.0
+    day_net = 0.0
+    by_symbol: dict[str, float] = {}
+    day = now.date().isoformat()
+    for closed_at, symbol, net in closed:
+        path += net
+        peak = max(peak, path)
+        worst = min(worst, path - peak)
+        if closed_at.startswith(day):
+            day_net += net
+            by_symbol[symbol] = by_symbol.get(symbol, 0.0) + net
+    return _exposure(gross, open_rows, symbols, day_net / PAPER_EQUITY, worst / PAPER_EQUITY, by_symbol)
+
+
+def _exposure(gross: float, open_rows: list, symbols: list, day_pnl, drawdown, by_symbol: dict) -> dict:
     return {
         "gross_open_usdt": gross,
         "n_open": len(open_rows),
         "open_symbols": symbols,
         "symbol_pnl_today": 0.0,
-        "day_pnl": 0.0,
-        "drawdown": 0.0,
+        "symbol_pnl_by_symbol": {key: value / PAPER_EQUITY for key, value in by_symbol.items()},
+        "day_pnl": day_pnl,
+        "drawdown": drawdown,
     }
 
 
@@ -53,6 +84,12 @@ def advance_positions(store, observations: list[dict], now: datetime) -> None:
         if fill.get("status") == "PENDING_ENTRY":
             opened = enter_later(cost, books)
             if opened.get("error"):
+                if _pending_expired(fill, now):
+                    store.update_fill(fill["id"], status="EXPIRED", cost_json={
+                        **cost,
+                        "expiry_reason": opened["error"],
+                        "expired_at": now.isoformat(),
+                    })
                 continue
             store.update_fill(fill["id"], status=opened["status"], cost_json=opened["cost_json"])
         elif fill.get("status") == "PAPER_FILLED" and cost.get("outcome_bp") is None:
@@ -60,6 +97,13 @@ def advance_positions(store, observations: list[dict], now: datetime) -> None:
             if closed.get("error"):
                 continue
             store.update_fill(fill["id"], status="CLOSED", cost_json=closed["cost_json"])
+
+
+def _pending_expired(fill: dict, now: datetime) -> bool:
+    created = _parse(fill.get("created_at_utc"))
+    if created is None:
+        return False
+    return now - created > PENDING_TTL
 
 
 def enter_later(pending: dict, books: list[dict]) -> dict:

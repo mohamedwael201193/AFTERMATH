@@ -278,6 +278,8 @@ def _decide_or_abstain(settings, store, observations, loaded, rows, now, transpo
     if pair is None:
         return abstain(cycle_reason(observations), rows), 0
     filing, _book = pair
+    if not _document_ready(filing):
+        return abstain("filing_document_missing", rows), 0
     cap = int(getattr(settings, "llm_daily_cap", 3))
     used = store.model_calls_on_day(now.strftime("%Y-%m-%d"))
     result = decide_bounded(
@@ -293,7 +295,22 @@ def _decide_or_abstain(settings, store, observations, loaded, rows, now, transpo
     return result, 1 if result.get("model_called") else 0
 
 
+def _document_ready(filing: dict) -> bool:
+    payload = filing.get("payload") or {}
+    digest = payload.get("document_sha256")
+    excerpt = payload.get("excerpt")
+    return (
+        isinstance(digest, str)
+        and len(digest) == 64
+        and isinstance(excerpt, str)
+        and bool(excerpt.strip())
+        and payload.get("excerpt_untrusted") is True
+    )
+
+
 def _precedent_count(store) -> int:
+    if hasattr(store, "count_reactions"):
+        return int(store.count_reactions())
     count = 0
     for item in (store.list_events(limit=200).get("items") or []):
         payload = item.get("payload") or {}
@@ -336,7 +353,16 @@ def _hold_if_approved(result: dict, loaded: list[dict], rows, store, now, market
             refused["decision_source"] = "model"
             refused["model_called"] = True
             return refused
-        market = {**portfolio_state(store), **fetched}
+        state = portfolio_state(store, now)
+        by_symbol = state.pop("symbol_pnl_by_symbol", {})
+        if state.get("day_pnl") is None or state.get("drawdown") is None:
+            refused = abstain("incomplete_market:pnl", rows, result["prompt_hash"])
+            refused["decision_source"] = "model"
+            refused["model_called"] = True
+            return refused
+        symbol = proposal.get("symbol")
+        state["symbol_pnl_today"] = float(by_symbol.get(symbol, 0.0))
+        market = {**state, **fetched}
     derived = derive_execution(proposal, events, "model", now=now, market=market)
     if derived["error"]:
         refused = abstain(derived["error"], rows, result["prompt_hash"])

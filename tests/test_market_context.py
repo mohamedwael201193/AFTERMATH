@@ -122,7 +122,10 @@ def test_fixed_size_proposal_waits_for_a_later_book_when_the_market_is_complete(
     filing = {
         "source": "sec-edgar", "instrument_id": "NVDAUSDT", "event_type": "filing",
         "event_time_utc": now, "fetched_at_utc": now,
-        "payload": {"form": "8-K", "items": "2.02", "qualifies": True, "accession": "fresh-2.02"},
+        "payload": {
+            "form": "8-K", "items": "2.02", "qualifies": True, "accession": "fresh-2.02",
+            "document_sha256": "b" * 64, "excerpt": "Item 2.02 results of operations.", "excerpt_untrusted": True,
+        },
         "mapping_confidence": 1.0,
     }
 
@@ -203,7 +206,10 @@ def test_non_test_cycle_loads_public_market_context(monkeypatch):
     filing = {
         "source": "sec-edgar", "instrument_id": "NVDAUSDT", "event_type": "filing",
         "event_time_utc": now, "fetched_at_utc": now,
-        "payload": {"form": "8-K", "items": "2.02", "qualifies": True, "accession": "ctx-2.02"},
+        "payload": {
+            "form": "8-K", "items": "2.02", "qualifies": True, "accession": "ctx-2.02",
+            "document_sha256": "c" * 64, "excerpt": "Item 2.02 results of operations.", "excerpt_untrusted": True,
+        },
         "mapping_confidence": 1.0,
     }
 

@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from aftermath_api.cycle import run_paper_cycle
 from aftermath_api.metrics import evaluate
-from aftermath_api.positions import close_later, enter_later, paired_from_fills, summarize
+from aftermath_api.positions import close_later, enter_later, paired_from_fills, portfolio_state, summarize
 from aftermath_api.store import MemoryStore
 from tests.test_events import _settings
 
@@ -99,7 +99,7 @@ def test_cycle_opens_a_pending_entry_only_on_a_later_book():
         "idempotency_key": "pending-entry",
         "status": "PENDING_ENTRY",
         "cost_json": _pending(proposed, "proposal-book"),
-        "created_at_utc": proposed,
+        "created_at_utc": (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat(),
     })
     same = _book(proposed, "proposal-book", 99.99, 100.01, [[99.99, 10]], [[100.0, 10]])
     run_paper_cycle(_settings(llm_configured=False, decisions="abstain_only"), store, fetch=lambda: ([same], []))
@@ -120,3 +120,40 @@ def test_cycle_opens_a_pending_entry_only_on_a_later_book():
     assert opened["status"] == "PAPER_FILLED"
     assert opened["cost_json"]["entry_book_hash"] == "entry-book"
     assert opened["cost_json"].get("outcome_bp") is None
+
+
+def test_a_pending_entry_expires_without_a_fill():
+    store = MemoryStore()
+    proposed = "2026-10-10T12:00:00+00:00"
+    store.insert_fill({
+        "id": "fill_old",
+        "decision_id": "dec_old",
+        "idempotency_key": "old-entry",
+        "status": "PENDING_ENTRY",
+        "cost_json": _pending(proposed, "proposal-book"),
+        "created_at_utc": (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat(),
+    })
+    same = _book(proposed, "proposal-book", 99.99, 100.01, [[99.99, 10]], [[100.0, 10]])
+    run_paper_cycle(_settings(llm_configured=False, decisions="abstain_only"), store, fetch=lambda: ([same], []))
+    expired = store.list_fills()[0]
+    assert expired["status"] == "EXPIRED"
+    assert expired["cost_json"]["expiry_reason"] == "no_later_book"
+    assert expired["cost_json"].get("entry") is None
+    assert store.fill_events[-1]["status"] == "EXPIRED"
+
+
+def test_closed_pnl_is_a_fraction_of_equity():
+    store = MemoryStore()
+    today = datetime.now(timezone.utc).isoformat()
+    store.insert_fill({
+        "id": "fill_closed",
+        "decision_id": "dec_closed",
+        "idempotency_key": "closed",
+        "status": "CLOSED",
+        "cost_json": {"symbol": "NVDAUSDT", "net_usdt": -100.0, "closed_at": today},
+        "created_at_utc": today,
+    })
+    state = portfolio_state(store)
+    assert state["day_pnl"] == -0.01
+    assert state["drawdown"] == -0.01
+    assert state["symbol_pnl_by_symbol"]["NVDAUSDT"] == -0.01

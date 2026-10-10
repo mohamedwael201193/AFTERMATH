@@ -68,6 +68,15 @@ class MemoryStore:
                 return True
         return False
 
+    def count_reactions(self) -> int:
+        count = 0
+        for row in self.events.values():
+            payload = row.get("payload") or {}
+            reaction = payload.get("reaction_bp")
+            if payload.get("counted") is True and isinstance(reaction, (int, float)) and not isinstance(reaction, bool):
+                count += 1
+        return count
+
     def insert_evidence(self, row: dict) -> dict:
         if row["id"] in self.evidence:
             return self.evidence[row["id"]]
@@ -277,6 +286,15 @@ class PostgresStore:
                 (accession,),
             ).fetchone()
         return row is not None
+
+    def count_reactions(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                f"""SELECT COUNT(*) FROM {self.schema}.events
+                    WHERE payload->>'counted' = 'true'
+                      AND jsonb_typeof(payload->'reaction_bp') = 'number'"""
+            ).fetchone()
+        return int(row[0])
 
     def insert_evidence(self, row: dict) -> dict:
         sql = f"""
