@@ -39,6 +39,10 @@ __pycache__/
 venv/
 *.egg-info/
 
+# Supplied later. Do not publish it from this repository until integration.
+/frontend/
+/FRONTEND/
+
 # Node / frontend build output (integration phase only)
 node_modules/
 .next/
