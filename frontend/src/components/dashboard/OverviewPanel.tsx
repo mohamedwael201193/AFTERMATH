@@ -155,12 +155,14 @@ export function OverviewPanel({
         />
         <SummaryCard
           icon={ShieldCheck}
-          label="Risk blocks"
+          label={cycle?.reason === "no_qualifying_event" ? "Pre-model refusal" : "Risk blocks"}
           value={String(cycle?.refusalCount ?? blocks.length)}
           hint={cycle?.stale ? "last cycle is older than 2 hours" : cycle?.reason || "refusals as designed"}
           detail={
             <p className="text-[11px] font-semibold text-ink-soft">
-              Missing evidence, stale data, or unsupported claims
+              {cycle?.reason === "no_qualifying_event"
+                ? "The model and the governor were not called. This is not a risk-block."
+                : "Missing evidence, stale data, or unsupported claims"}
             </p>
           }
         />
@@ -178,10 +180,10 @@ export function OverviewPanel({
         <section className="grid grid-cols-1 gap-3 content-start">
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
             <h3 className="text-sm font-bold uppercase tracking-wide text-ink-soft">
-              Recent events
+              Recent observations
             </h3>
             <span className="min-w-0 text-[11px] font-semibold text-ink-soft">
-              select one to open its full decision record
+              stored books, not filings or model decisions
             </span>
           </div>
           <EventFeed events={events} limit={4} showFilters={false} />

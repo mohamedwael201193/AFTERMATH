@@ -147,6 +147,19 @@ def test_cycle_uses_the_next_symbol_when_the_earlier_book_is_blocked():
     assert len(seen) == 1
 
 
+def test_accession_dedupe_uses_the_full_store():
+    store = MemoryStore()
+    store.insert_event({
+        "id": "ev_old",
+        "instrument_id": "NVDAUSDT",
+        "event_type": "filing",
+        "event_time_utc": "2026-01-01T00:00:00+00:00",
+        "payload": {"accession": "0001045810-26-000099"},
+    })
+    assert store.has_accession("0001045810-26-000099") is True
+    assert store.has_accession("missing") is False
+
+
 def test_qualifying_filing_calls_the_model_once_and_does_not_fill():
     store = MemoryStore()
     seen = []

@@ -62,6 +62,12 @@ class MemoryStore:
             nxt = f"{last['event_time_utc']}|{last['id']}"
         return {"items": page, "next_cursor": nxt}
 
+    def has_accession(self, accession: str) -> bool:
+        for row in self.events.values():
+            if (row.get("payload") or {}).get("accession") == accession:
+                return True
+        return False
+
     def insert_evidence(self, row: dict) -> dict:
         if row["id"] in self.evidence:
             return self.evidence[row["id"]]
@@ -263,6 +269,14 @@ class PostgresStore:
             last = items[-1]
             nxt = f"{last['event_time_utc']}|{last['id']}"
         return {"items": items, "next_cursor": nxt}
+
+    def has_accession(self, accession: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT 1 FROM {self.schema}.events WHERE payload->>'accession' = %s LIMIT 1",
+                (accession,),
+            ).fetchone()
+        return row is not None
 
     def insert_evidence(self, row: dict) -> dict:
         sql = f"""

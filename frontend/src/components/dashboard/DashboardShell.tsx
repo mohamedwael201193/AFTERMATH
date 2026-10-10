@@ -47,7 +47,7 @@ function MarketStatusChips() {
           <span className="absolute inline-flex h-full w-full animate-pulse-ring rounded-full bg-forest" />
           <span className="relative inline-flex h-2 w-2 rounded-full bg-forest" />
         </span>
-        Continuous book · paper only
+        Hourly cycle · not continuous
       </span>
       <span className="hidden rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft md:inline">
         Production API · paper only

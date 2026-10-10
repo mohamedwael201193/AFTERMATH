@@ -52,6 +52,10 @@ The primary comparison is the paired agent result versus the fixed-sign rule, wi
 
 Stop the counted strategy if cumulative agent net reaches -150 basis points, five consecutive governed losses occur, a fill is outside the stored book, a lifecycle record is unsigned, or the governor refuses every proposal across 10 or more complete proposals.
 
+## Warm-up context
+
+The frozen governor requires at least three observable Item 2.02 reactions before it can approve a new proposal. Those reactions may be recorded before the prospective window. A warm-up reaction can satisfy `n_precedents`. It is not a counted S-A outcome, and it does not enter the paired metric sample. If fewer than three stored reactions exist, the governor refuses `precedents_ok`. That count is never replaced with a constant.
+
 ## Current status
 
 `INSUFFICIENT_DATA`. No counted S-A outcome exists under this protocol. Trading edge: inconclusive.

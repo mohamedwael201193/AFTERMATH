@@ -227,6 +227,8 @@ def _already_seen(store, filing: dict) -> bool:
     accession = (filing.get("payload") or {}).get("accession")
     if not accession:
         return False
+    if hasattr(store, "has_accession"):
+        return bool(store.has_accession(accession))
     page = store.list_events(limit=200)
     for item in page.get("items") or []:
         if (item.get("payload") or {}).get("accession") == accession:
