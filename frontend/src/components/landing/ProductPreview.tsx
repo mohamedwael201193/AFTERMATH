@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowRight, Pause, Play, Check } from "lucide-react";
 import type { EventBundle } from "@/types/domain";
-import { dataProvider } from "@/services";
+import { previewDataProvider } from "@/services";
 import { SectionHeading } from "@/components/landing/SectionHeading";
 import { Reveal } from "@/components/landing/Reveal";
 import { DecisionGlyph, RiskMark, FreshnessDot } from "@/components/artwork/StatusGlyphs";
@@ -33,7 +33,7 @@ export function ProductPreview({ onOpenDashboard }: { onOpenDashboard: () => voi
 
   useEffect(() => {
     let alive = true;
-    dataProvider.getEventBundle("EV-1001").then((b) => {
+    previewDataProvider.getEventBundle("EV-1001").then((b) => {
       if (alive) setBundle(b);
     });
     return () => {
