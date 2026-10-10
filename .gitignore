@@ -17,10 +17,10 @@ IMPLEMENTATION_LEDGER.md
 EXECUTION_PLAN.md
 PLAN_VALIDATION_REPORT.md
 PLAN_INPUT_INVENTORY.md
-evidence/
+/evidence/
 
 # Generated data, caches, logs, and test artifacts
-data/
+/data/
 cache/
 artifacts/
 results/
