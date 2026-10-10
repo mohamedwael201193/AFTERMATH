@@ -84,21 +84,67 @@ def test_edgar_requires_user_agent_and_selects_only_qualifying_items():
     with pytest.raises(ApiError) as denied:
         fetch_filings("", lambda *_a, **_k: {}, _now())
     assert denied.value.message == "sec_user_agent_missing"
+    fresh = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     payload = {
         "cik": "1045810",
         "filings": {"recent": {
-            "form": ["10-K", "8-K"],
-            "items": ["", "2.02"],
-            "filingDate": ["2026-02-01", "2026-03-01"],
-            "accessionNumber": ["0001045810-26-000010", "0001045810-26-000011"],
-            "primaryDocument": ["a.htm", "b.htm"],
+            "form": ["10-K", "8-K", "8-K"],
+            "items": ["", "2.02", "1.01"],
+            "filingDate": ["2026-02-01", "2026-10-11", "2026-10-11"],
+            "acceptanceDateTime": ["2026-02-01T12:00:00Z", fresh, fresh],
+            "accessionNumber": ["0001045810-26-000010", "0001045810-26-000011", "0001045810-26-000012"],
+            "primaryDocument": ["a.htm", "b.htm", "c.htm"],
         }},
     }
     filing = filing_from_submissions("NVDAUSDT", payload, _now())
     assert filing["payload"]["accession"] == "0001045810-26-000011"
     assert filing["payload"]["qualifies"] is True
+    assert filing["event_time_utc"].startswith(fresh[:19])
+    assert "T00:00:00" not in filing["event_time_utc"]
     assert "sec.gov/Archives/edgar/data/1045810/" in filing["payload"]["source_url"]
-    assert filing_from_submissions("NVDAUSDT", {"filings": {"recent": {"form": ["8-K"], "items": ["1.01"], "filingDate": ["2026-03-01"], "accessionNumber": ["x"], "primaryDocument": ["a.htm"]}}}, _now()) is None
+    old = {
+        "cik": "1045810",
+        "filings": {"recent": {
+            "form": ["8-K"], "items": ["2.02"], "filingDate": ["2026-01-01"],
+            "acceptanceDateTime": ["2026-01-01T16:00:00Z"],
+            "accessionNumber": ["old"], "primaryDocument": ["a.htm"],
+        }},
+    }
+    assert filing_from_submissions("NVDAUSDT", old, _now()) is None
+    missing = {
+        "filings": {"recent": {
+            "form": ["8-K"], "items": ["2.02"], "filingDate": ["2026-10-11"],
+            "accessionNumber": ["x"], "primaryDocument": ["a.htm"],
+        }},
+    }
+    assert filing_from_submissions("NVDAUSDT", missing, _now()) is None
+    assert filing_from_submissions("NVDAUSDT", {"filings": {"recent": {"form": ["8-K"], "items": ["1.01"], "acceptanceDateTime": [fresh], "accessionNumber": ["x"], "primaryDocument": ["a.htm"]}}}, _now()) is None
+
+
+def test_cycle_uses_the_next_symbol_when_the_earlier_book_is_blocked():
+    earlier = datetime.now(timezone.utc).isoformat()
+    nvda = _filing("NVDAUSDT")
+    nvda["event_time_utc"] = earlier
+    nvda["payload"] = {**nvda["payload"], "accession": "nvda-old-book"}
+    tsla = _filing("TSLAUSDT")
+    tsla["payload"] = {**tsla["payload"], "accession": "tsla-fresh"}
+    wide = _book("NVDAUSDT")
+    wide["payload"] = {**wide["payload"], "spread_bp": 40.0}
+    seen = []
+
+    def transport(_url, json=None, headers=None, timeout=None):
+        seen.append(json)
+        cited = __import__("json").loads(json["messages"][1]["content"])["evidence"][0]["id"]
+        return _reply(_proposal(cited, symbol="TSLAUSDT"))
+
+    result = run_paper_cycle(
+        _settings(), MemoryStore(),
+        fetch=lambda: ([wide, _book("TSLAUSDT")], []),
+        event_fetch=lambda: [nvda, tsla],
+        model_transport=transport,
+    )
+    assert result["reason"] == "model_no_action"
+    assert len(seen) == 1
 
 
 def test_qualifying_filing_calls_the_model_once_and_does_not_fill():

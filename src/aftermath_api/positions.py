@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 from .execution_context import derive_execution
@@ -9,6 +10,40 @@ from .paper import paper_fill
 
 MIN_CLOSED = 30
 FALLBACK_FUNDING_8H = 0.0001
+
+
+def portfolio_state(store) -> dict:
+    fills = store.list_fills()
+    open_rows = [row for row in fills if row.get("status") in ("PENDING_ENTRY", "PAPER_FILLED")]
+    symbols = []
+    gross = 0.0
+    for row in open_rows:
+        cost = row.get("cost_json") or {}
+        symbol = cost.get("symbol")
+        if symbol:
+            symbols.append(str(symbol))
+        entry = cost.get("entry") or {}
+        try:
+            gross += float(entry.get("filled_usdt") or cost.get("notional") or 0)
+        except (TypeError, ValueError):
+            continue
+    return {
+        "gross_open_usdt": gross,
+        "n_open": len(open_rows),
+        "open_symbols": symbols,
+        "symbol_pnl_today": 0.0,
+        "day_pnl": 0.0,
+        "drawdown": 0.0,
+    }
+
+
+def lifecycle_intact(store, fill_id: str) -> bool:
+    events = [row for row in getattr(store, "fill_events", []) if row.get("fill_id") == fill_id]
+    current = next((row for row in store.list_fills() if row.get("id") == fill_id), None)
+    if current is None or not events:
+        return False
+    last = events[-1]
+    return last.get("status") == current.get("status") and last.get("cost_json") == current.get("cost_json")
 
 
 def advance_positions(store, observations: list[dict], now: datetime) -> None:
@@ -44,6 +79,8 @@ def enter_later(pending: dict, books: list[dict]) -> dict:
             **pending,
             "entry": walk["walk"],
             "entry_book_hash": derived["book_hash"],
+            "entry_ref": derived["ref_price"],
+            "entry_profile": _json_profile(derived["profile"]),
             "opened_at": book.get("fetched_at_utc"),
             "fee_rate": derived["fee_rate"],
         },
@@ -90,7 +127,81 @@ def close_later(cost: dict, books: list[dict], now: datetime) -> dict:
             "funding_source": "fallback_1bp_per_8h",
             "net_usdt": round(net, 6),
             "outcome_bp": round(net / filled * 1e4, 4) if filled else None,
+            "baselines": _baselines(cost, derived, opened, closed_at),
         },
+    }
+
+
+def paired_from_fills(fills: list[dict]) -> list[dict]:
+    pairs = []
+    for row in fills:
+        cost = row.get("cost_json") or {}
+        baselines = cost.get("baselines")
+        if not isinstance(baselines, dict) or cost.get("outcome_bp") is None or not cost.get("closed_at"):
+            continue
+        if any(baselines.get(f"{name}_bp") is None for name in ("fixed_sign", "llm_off", "random", "no_trade")):
+            continue
+        pairs.append({
+            "closed_at": cost["closed_at"],
+            "agent_bp": float(cost["outcome_bp"]),
+            "fixed_sign_bp": float(baselines["fixed_sign_bp"]),
+            "llm_off_bp": float(baselines["llm_off_bp"]),
+            "random_bp": float(baselines["random_bp"]),
+            "no_trade_bp": float(baselines["no_trade_bp"]),
+        })
+    return pairs
+
+
+def _baselines(cost: dict, exit_derived: dict, opened: datetime, closed_at: datetime) -> dict:
+    no_trade = {"fixed_sign_bp": None, "llm_off_bp": 0.0, "random_bp": None, "no_trade_bp": 0.0}
+    profile = _profile(cost.get("entry_profile"))
+    exit_profile = exit_derived["profile"]
+    entry_ref = cost.get("entry_ref")
+    try:
+        notional = float(cost.get("notional"))
+        fee = float(cost.get("fee_rate"))
+        entry_ref = float(entry_ref)
+    except (TypeError, ValueError):
+        return no_trade
+    if profile is None:
+        return no_trade
+    fixed = _arm_bp(1, notional, entry_ref, profile, exit_derived["ref_price"], exit_profile, fee, opened, closed_at)
+    seed = hashlib.sha256(f"{cost.get('symbol')}|{cost.get('opened_at')}".encode()).digest()
+    random_side = 1 if seed[0] % 2 == 0 else -1
+    random_bp = _arm_bp(random_side, notional, entry_ref, profile, exit_derived["ref_price"], exit_profile, fee, opened, closed_at)
+    return {"fixed_sign_bp": fixed, "llm_off_bp": 0.0, "random_bp": random_bp, "no_trade_bp": 0.0}
+
+
+def _arm_bp(side: int, notional: float, entry_ref: float, entry_profile: dict, exit_ref: float, exit_profile: dict, fee: float, opened: datetime, closed_at: datetime):
+    entry = paper_fill(side, notional, entry_ref, entry_profile, fee)
+    if entry["status"] != "PAPER_FILLED":
+        return None
+    qty = float(entry["walk"]["qty"])
+    exit_walk = paper_fill(-side, qty * exit_ref, exit_ref, exit_profile, fee)
+    if exit_walk["status"] != "PAPER_FILLED":
+        return None
+    gross = side * qty * (float(exit_walk["walk"]["vwap"]) - float(entry["walk"]["vwap"]))
+    funding, _settlements = _funding(float(entry["walk"]["filled_usdt"]), opened, closed_at)
+    net = gross - float(entry["walk"]["fee_usdt"]) - float(exit_walk["walk"]["fee_usdt"]) - funding
+    filled = float(entry["walk"]["filled_usdt"])
+    if filled <= 0:
+        return None
+    return round(net / filled * 1e4, 4)
+
+
+def _json_profile(profile: dict) -> dict:
+    return {
+        "bids": [[float(offset), float(size)] for offset, size in profile["bids"]],
+        "asks": [[float(offset), float(size)] for offset, size in profile["asks"]],
+    }
+
+
+def _profile(value) -> dict | None:
+    if not isinstance(value, dict) or not value.get("bids") or not value.get("asks"):
+        return None
+    return {
+        "bids": [(float(level[0]), float(level[1])) for level in value["bids"]],
+        "asks": [(float(level[0]), float(level[1])) for level in value["asks"]],
     }
 
 

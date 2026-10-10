@@ -2,11 +2,28 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 
 
 class Immutable(Exception):
     pass
+
+
+def _insert_fill_event(conn, schema: str, fill_id: str, status: str, cost_json) -> None:
+    """Append the lifecycle row. A missing table does not roll back the fill."""
+    conn.execute("SAVEPOINT fill_event")
+    try:
+        conn.execute(
+            f"INSERT INTO {schema}.fill_events (fill_id, status, cost_json) VALUES (%s, %s, %s)",
+            (fill_id, status, cost_json),
+        )
+    except Exception as exc:
+        conn.execute("ROLLBACK TO SAVEPOINT fill_event")
+        if "fill_events" not in str(exc):
+            raise
+        return
+    conn.execute("RELEASE SAVEPOINT fill_event")
 
 
 @dataclass
@@ -16,6 +33,7 @@ class MemoryStore:
     decisions: dict = field(default_factory=dict)
     decision_evidence: list = field(default_factory=list)
     fills: dict = field(default_factory=dict)
+    fill_events: list = field(default_factory=list)
     idempotency: dict = field(default_factory=dict)
     ledger: list = field(default_factory=list)
     receipts: dict = field(default_factory=dict)
@@ -98,6 +116,7 @@ class MemoryStore:
         if key in self.fills:
             return self.fills[key]
         self.fills[key] = dict(row)
+        self._append_fill_event(row["id"], row["status"], row["cost_json"])
         return self.fills[key]
 
     def fill_for_key(self, key: str) -> dict | None:
@@ -134,8 +153,17 @@ class MemoryStore:
         for row in self.fills.values():
             if row.get("id") == fill_id:
                 row.update(fields)
+                self._append_fill_event(fill_id, row.get("status"), row.get("cost_json"))
                 return row
         return None
+
+    def _append_fill_event(self, fill_id: str, status, cost_json) -> None:
+        self.fill_events.append({
+            "fill_id": fill_id,
+            "seq": len(self.fill_events) + 1,
+            "status": status,
+            "cost_json": copy.deepcopy(cost_json),
+        })
 
     def list_ledger(self) -> list:
         return list(self.ledger)
@@ -335,6 +363,7 @@ class PostgresStore:
                 VALUES (%s, %s, %s, %s, %s, %s)""",
                 (row["id"], row["decision_id"], row["idempotency_key"], row["status"], Json(row["cost_json"]), row["created_at_utc"]),
             )
+            _insert_fill_event(conn, self.schema, row["id"], row["status"], Json(row["cost_json"]))
             conn.commit()
         return row
 
@@ -351,6 +380,8 @@ class PostgresStore:
                 f"UPDATE {self.schema}.paper_fills SET status = %s, cost_json = %s WHERE id = %s RETURNING id, decision_id, idempotency_key, status, cost_json, created_at_utc",
                 (fields["status"], Json(fields["cost_json"]), fill_id),
             ).fetchone()
+            if row:
+                _insert_fill_event(conn, self.schema, fill_id, fields["status"], Json(fields["cost_json"]))
             conn.commit()
         return _fill_row(row) if row else None
 

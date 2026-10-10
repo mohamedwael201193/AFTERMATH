@@ -24,6 +24,8 @@ PROMPT = (Path(__file__).resolve().parents[2] / "prompts" / "decision_v1.txt").r
 PROMPT_HASH = hashlib.sha256(PROMPT.encode()).hexdigest()
 PROMPT_V2 = (Path(__file__).resolve().parents[2] / "prompts" / "decision_v2.txt").read_text(encoding="utf-8")
 PROMPT_V2_HASH = hashlib.sha256(PROMPT_V2.encode()).hexdigest()
+PROMPT_V3 = (Path(__file__).resolve().parents[2] / "prompts" / "decision_v3.txt").read_text(encoding="utf-8")
+PROMPT_V3_HASH = hashlib.sha256(PROMPT_V3.encode()).hexdigest()
 PROPOSAL_FIELDS = (
     "action",
     "symbol",
@@ -135,7 +137,7 @@ def decide_bounded(
     rows = [(r["id"], r["payload_hash"]) for r in evidence_rows]
 
     def refuse(reason: str, called: bool = False) -> dict:
-        refused = abstain(reason, rows, PROMPT_V2_HASH)
+        refused = abstain(reason, rows, PROMPT_V3_HASH)
         if called:
             refused["model_called"] = True
             refused["decision_source"] = "model"
@@ -154,7 +156,7 @@ def decide_bounded(
     if not has_order_book(events):
         return refuse("missing_order_book")
     try:
-        text = call_model(settings, evidence_rows, transport, prompt=PROMPT_V2)
+        text = call_model(settings, evidence_rows, transport, prompt=PROMPT_V3)
     except Exception:
         return refuse("llm_unavailable", called=True)
     parsed = _parse(text)
@@ -173,7 +175,7 @@ def decide_bounded(
         verdict, _details = check_text(spoken, facts, allow_words=False)
         if verdict != "OK":
             return refuse("unverifiable_number", called=True)
-    out = abstain("model_no_action", rows, PROMPT_V2_HASH)
+    out = abstain("model_no_action", rows, PROMPT_V3_HASH)
     out["model_called"] = True
     out["decision_source"] = "model"
     out["proposal"] = parsed

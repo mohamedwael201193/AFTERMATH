@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 import time
 import uuid
@@ -24,7 +25,8 @@ from .gate import core_blockers, has_order_book
 from .identity import accept_mapping, resolve_symbol
 from .ids import SCHEMA_VERSION, event_id, evidence_id, payload_hash, utc_now
 from .paper import govern, paper_fill
-from .positions import summarize
+from .metrics import evaluate
+from .positions import paired_from_fills, summarize
 from .receipts import chain_intact, issue_receipt, verify_line
 from .store import MemoryStore, PostgresStore
 
@@ -255,13 +257,16 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
             "stale": _run_is_stale(run),
             "fill_count": len(opened),
             "paper_only": True,
+            "kill_switch": os.environ.get("AFTERMATH_KILL") == "1",
             "sources": {"sec_edgar": {"status": sec, "reason": None if settings.sec_user_agent else "sec_user_agent_missing"}},
         }
 
     @app.get("/v1/metrics")
     def metrics(request: Request):
         reader(request)
-        return summarize(store.list_fills())
+        body = summarize(store.list_fills())
+        body["evaluation"] = evaluate(paired_from_fills(store.list_fills()))
+        return body
 
     @app.post("/v1/decisions")
     async def decisions(request: Request):

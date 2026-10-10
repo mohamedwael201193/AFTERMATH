@@ -1,0 +1,22 @@
+name: aftermath-sa-twin
+label: Separate Studio implementation; Bitget-managed model/data; 15-minute-or-slower polling; no direct EDGAR or AFTERMATH call.
+hypothesis: Item 2.02 earnings residual versus a Nasdaq-100 reference, paper only.
+universe:
+  - NVDAUSDT
+  - TSLAUSDT
+  - AAPLUSDT
+  - AMZNUSDT
+  - MSFTUSDT
+  - METAUSDT
+  - GOOGLUSDT
+  - COINUSDT
+  - MSTRUSDT
+size_frac: 0.05
+horizon_hours: 24
+actions:
+  - LONG
+  - SHORT
+  - NO_ACTION
+merge_into_aftermath_metrics: false
+upload: false
+paper_enabled: false

@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
 from aftermath_api.cycle import run_paper_cycle
-from aftermath_api.positions import close_later, enter_later, summarize
+from aftermath_api.metrics import evaluate
+from aftermath_api.positions import close_later, enter_later, paired_from_fills, summarize
 from aftermath_api.store import MemoryStore
 from tests.test_events import _settings
 
@@ -67,6 +68,14 @@ def test_later_book_entry_and_exit_match_the_cost_model():
     assert closed["cost_json"]["net_usdt"] == 0.8494
     assert closed["cost_json"]["outcome_bp"] == 84.94
     assert closed["cost_json"]["exit_book_hash"] == "exit-book"
+    baselines = closed["cost_json"]["baselines"]
+    assert baselines["fixed_sign_bp"] == 84.94
+    assert baselines["llm_off_bp"] == 0
+    assert baselines["no_trade_bp"] == 0
+    assert baselines["random_bp"] is not None
+    report = evaluate(paired_from_fills([{"cost_json": closed["cost_json"]}]))
+    assert report["status"] == "INSUFFICIENT_DATA"
+    assert report["sample_size"] == 1
 
 
 def test_metrics_stay_insufficient_below_the_preregistered_minimum():

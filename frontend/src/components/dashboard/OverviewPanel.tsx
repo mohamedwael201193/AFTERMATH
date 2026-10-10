@@ -146,7 +146,7 @@ export function OverviewPanel({
           icon={Activity}
           label="Paper fills"
           value={String(cycle?.fillCount ?? fills.length)}
-          hint={fills.length ? "fills recorded on the ledger" : "INSUFFICIENT_DATA"}
+          hint={cycle?.evaluationStatus || (fills.length ? "fills recorded on the ledger" : "INSUFFICIENT_DATA")}
           detail={
             <p className="text-[11px] font-semibold text-ink-soft">
               {fills.map((f) => f.instrumentSymbol).join(" · ")} — estimates, not profits

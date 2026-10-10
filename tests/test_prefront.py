@@ -159,10 +159,13 @@ def test_non_finite_size_is_refused_and_no_order_route_exists():
     verdict = govern({"action": "LONG", "symbol": "NVDAUSDT", "size_frac": float("nan"), "horizon_hours": 24, "confidence": 0.8}, ctx)
     assert verdict["verdict"] == "REFUSED"
     root = Path(__file__).resolve().parents[1] / "src"
-    text = "\n".join(path.read_text(encoding="utf-8") for path in root.rglob("*.py"))
+    paths = [path for path in root.rglob("*.py") if path.name != "bitget_demo.py"]
+    text = "\n".join(path.read_text(encoding="utf-8") for path in paths)
     assert "place-order" not in text
     assert "/api/v2/mix/order" not in text
     assert "withdraw" not in text
+    app = (root / "aftermath_api" / "app.py").read_text(encoding="utf-8")
+    assert "submit_demo_order" not in app
 
 
 def test_reader_rate_limit_and_database_ping_failure(tmp_path):

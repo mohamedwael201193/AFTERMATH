@@ -99,7 +99,7 @@ def persist_observation(store, body: dict) -> dict:
     return {"event": event, "evidence": evidence}
 
 
-def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", event_fetch=None, model_transport=None) -> dict:
+def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", event_fetch=None, model_transport=None, market_fetch=None) -> dict:
     now = datetime.now(timezone.utc)
     key = "paper-cycle:v2:" + now.strftime("%Y-%m-%dT%H")
     existing = store.decision_for_key(key)
@@ -134,7 +134,7 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", even
         observations, errors = fetch_live(cache)
     filings: list[dict] = []
     if event_fetch is not None:
-        filings = event_fetch()
+        filings = [row for row in event_fetch() if not _already_seen(store, row)]
     elif settings.sec_user_agent.strip() and settings.env != "test":
         from .sources.edgar import fetch_filings
         import requests
@@ -145,7 +145,7 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", even
             return response.json()
 
         try:
-            filings = fetch_filings(settings.sec_user_agent, transport, utc_now())
+            filings = [row for row in fetch_filings(settings.sec_user_agent, transport, utc_now()) if not _already_seen(store, row)]
         except Exception as exc:
             errors.append(getattr(exc, "message", None) or "sec_fetch_failed")
     observations = list(observations) + list(filings)
@@ -164,7 +164,7 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", even
             rows.append((evid, phash))
             links.append(evid)
             loaded.append({"id": evid, "payload_hash": phash, "facts": obs.get("payload") or {}, "event": {**obs, "payload_hash": phash}})
-        result, model_calls = _decide_or_abstain(settings, store, observations, loaded, rows, now, model_transport)
+        result, model_calls = _decide_or_abstain(settings, store, observations, loaded, rows, now, model_transport, market_fetch)
     did = "dec_" + uuid.uuid4().hex[:24]
     store.insert_decision({
         "id": did,
@@ -223,34 +223,55 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", even
     }
 
 
-def _eligible_pair(observations: list[dict]) -> tuple[dict, dict] | None:
+def _already_seen(store, filing: dict) -> bool:
+    accession = (filing.get("payload") or {}).get("accession")
+    if not accession:
+        return False
+    page = store.list_events(limit=200)
+    for item in page.get("items") or []:
+        if (item.get("payload") or {}).get("accession") == accession:
+            return True
+    return False
+
+
+def _counted_filings(observations: list[dict]) -> list[dict]:
     filings = [
         row for row in observations
         if row.get("event_type") == "filing" and (row.get("payload") or {}).get("qualifies") is True
     ]
-    if not filings:
-        return None
-    filing = filings[0]
-    for book in observations:
-        if book.get("event_type") != "book" or book.get("instrument_id") != filing.get("instrument_id"):
+    return sorted(filings, key=lambda row: row.get("event_time_utc") or "")
+
+
+def _eligible_pair(observations: list[dict]) -> tuple[dict, dict] | None:
+    blocked = None
+    for filing in _counted_filings(observations):
+        same = [
+            row for row in observations
+            if row.get("event_type") == "book" and row.get("instrument_id") == filing.get("instrument_id")
+        ]
+        if not same:
+            blocked = blocked or "missing_order_book"
             continue
-        if _book_reason(book.get("payload") or {}) == "no_qualifying_event":
-            return filing, book
+        reason = _book_reason(same[0].get("payload") or {})
+        if reason == "no_qualifying_event":
+            return filing, same[0]
+        blocked = blocked or reason
     return None
 
 
-def _decide_or_abstain(settings, store, observations, loaded, rows, now, transport) -> tuple[dict, int]:
-    filings = [
-        row for row in observations
-        if row.get("event_type") == "filing" and (row.get("payload") or {}).get("qualifies") is True
-    ]
+def _decide_or_abstain(settings, store, observations, loaded, rows, now, transport, market_fetch=None) -> tuple[dict, int]:
+    filings = _counted_filings(observations)
     pair = _eligible_pair(observations)
     if pair is None and filings:
-        same = [
-            row for row in observations
-            if row.get("event_type") == "book" and row.get("instrument_id") == filings[0].get("instrument_id")
-        ]
-        reason = _book_reason(same[0].get("payload") or {}) if same else "missing_order_book"
+        reason = "missing_order_book"
+        for filing in filings:
+            same = [
+                row for row in observations
+                if row.get("event_type") == "book" and row.get("instrument_id") == filing.get("instrument_id")
+            ]
+            if same:
+                reason = _book_reason(same[0].get("payload") or {})
+                break
         return abstain(reason, rows), 0
     if pair is None:
         return abstain(cycle_reason(observations), rows), 0
@@ -266,13 +287,55 @@ def _decide_or_abstain(settings, store, observations, loaded, rows, now, transpo
         daily_cap=cap,
     )
     if result.get("reason") == "awaiting_next_book" and result.get("proposal"):
-        result = _hold_if_approved(result, loaded, rows)
+        result = _hold_if_approved(result, loaded, rows, store, now, _market_fetch(settings, store, market_fetch))
     return result, 1 if result.get("model_called") else 0
 
 
-def _hold_if_approved(result: dict, loaded: list[dict], rows) -> dict:
+def _precedent_count(store) -> int:
+    count = 0
+    for item in (store.list_events(limit=200).get("items") or []):
+        payload = item.get("payload") or {}
+        reaction = payload.get("reaction_bp")
+        if payload.get("counted") is True and isinstance(reaction, (int, float)) and not isinstance(reaction, bool):
+            count += 1
+    return count
+
+
+def _market_fetch(settings, store, injected):
+    if injected is not None:
+        return injected
+    if getattr(settings, "env", "test") == "test":
+        return None
+
+    def fetch(symbol, now):
+        from .connectors import BitgetConnector, market_from_public
+
+        cache = Path("/tmp/aftermath-cache") if Path("/tmp").is_dir() else Path(".") / "cache"
+        cache.mkdir(parents=True, exist_ok=True)
+        return market_from_public(BitgetConnector(cache), symbol, int(now.timestamp() * 1000), _precedent_count(store))
+
+    return fetch
+
+
+def _hold_if_approved(result: dict, loaded: list[dict], rows, store, now, market_fetch) -> dict:
+    from .positions import portfolio_state
+
+    proposal = dict(result["proposal"])
+    if proposal.get("action") in ("LONG", "SHORT"):
+        proposal["size_frac"] = 0.05
+        proposal["horizon_hours"] = 24.0
+    result["proposal"] = proposal
     events = [row["event"] for row in loaded if isinstance(row.get("event"), dict)]
-    derived = derive_execution(result["proposal"], events, "model")
+    market = None
+    if market_fetch is not None:
+        fetched = market_fetch(proposal.get("symbol"), now)
+        if not isinstance(fetched, dict):
+            refused = abstain("incomplete_market:source", rows, result["prompt_hash"])
+            refused["decision_source"] = "model"
+            refused["model_called"] = True
+            return refused
+        market = {**portfolio_state(store), **fetched}
+    derived = derive_execution(proposal, events, "model", now=now, market=market)
     if derived["error"]:
         refused = abstain(derived["error"], rows, result["prompt_hash"])
         refused["decision_source"] = "model"
@@ -295,7 +358,7 @@ def _hold_if_approved(result: dict, loaded: list[dict], rows) -> dict:
         "action": result["proposal"]["action"],
         "side": derived["side"],
         "notional": float(verdict["size_frac"]) * PAPER_EQUITY,
-        "horizon_hours": float(result["proposal"]["horizon_hours"]),
+        "horizon_hours": 24.0,
         "proposal_book_hash": derived["book_hash"],
         "proposal_fetched_at": derived["proposal_fetched_at"],
         "fee_rate": derived["fee_rate"],

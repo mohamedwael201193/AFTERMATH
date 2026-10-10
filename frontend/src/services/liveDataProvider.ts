@@ -22,6 +22,7 @@ export interface CycleSnapshot {
   occurredAt: string | null;
   status: string | null;
   stale: boolean;
+  evaluationStatus: string | null;
 }
 
 const NAMES: Record<string, string> = {
@@ -68,7 +69,7 @@ function asEvent(row: Record<string, unknown>): MarketEvent {
     category: "MARKET",
     occurredAt: String(row.fetched_at_utc || row.event_time_utc),
     source: { id: "bitget-rest", name: "Bitget public REST", kind: "EXCHANGE_FEED", trust: "PRIMARY" },
-    evidenceCompleteness: book ? 1 : 0,
+    evidenceCompleteness: 0,
     decisionState: "NO ACTION",
     status: "NEW",
   };
@@ -128,6 +129,7 @@ function cycleFromOps(ops: {
     occurredAt: latest?.finished_at_utc || latest?.started_at_utc || null,
     status: latest?.status || null,
     stale: ops.stale === true,
+    evaluationStatus: null,
   };
 }
 
@@ -336,9 +338,10 @@ export const liveDataProvider = {
     activity: ActivityRecord[];
     cycle: CycleSnapshot;
   }> {
-    const [eventBody, ops] = await Promise.all([
+    const [eventBody, ops, metrics] = await Promise.all([
       readJson("/v1/events?limit=50") as Promise<{ items?: Record<string, unknown>[] }>,
       readJson("/v1/ops/status") as Promise<Parameters<typeof cycleFromOps>[0]>,
+      readJson("/v1/metrics").catch(() => null) as Promise<{ status?: string; evaluation?: { status?: string } } | null>,
     ]);
     const items = eventBody.items || [];
     const events = items.map(asEvent);
@@ -352,6 +355,7 @@ export const liveDataProvider = {
     }
     const symbols = [...new Set(events.map((event) => event.instrumentSymbol).filter(Boolean))] as string[];
     const cycle = cycleFromOps(ops);
+    cycle.evaluationStatus = metrics?.evaluation?.status || metrics?.status || null;
     return {
       events,
       observations,
