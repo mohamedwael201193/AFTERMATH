@@ -1,0 +1,8 @@
+{
+  "fixture": true,
+  "id": "rcpt_example",
+  "ledger_seq": 1,
+  "ots_status": "pending",
+  "source": "fixture",
+  "schema_version": 1
+}

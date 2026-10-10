@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import time
 import uuid
@@ -17,7 +18,7 @@ from fastapi.responses import JSONResponse
 from .auth import require_decision, require_job, require_reader
 from .config import ROOT, Settings, load_settings
 from .errors import ApiError, error_body, install_errors
-from .identity import accept_mapping
+from .identity import accept_mapping, resolve_symbol
 from .ids import SCHEMA_VERSION, event_id, evidence_id, payload_hash, utc_now
 from .paper import govern, paper_fill
 from .receipts import chain_intact, issue_receipt, verify_line
@@ -239,9 +240,12 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
             if verdict["verdict"] != "APPROVED":
                 saved = store.update_decision(saved["id"], status="RISK_REJECTED", reason=",".join(verdict.get("reasons") or []))
             else:
+                requested = float(body.get("notional", 0))
+                cap = float(verdict["size_frac"]) * float(ctx.get("equity") or 0)
+                notional = requested if not math.isfinite(requested) else min(requested, cap)
                 walk = paper_fill(
                     int(body.get("side", 1)),
-                    float(body.get("notional", 0)),
+                    notional,
                     float(body.get("ref_price", 0)),
                     body.get("book") or {"bids": [], "asks": []},
                     float(body.get("fee_rate", 0)),
@@ -296,6 +300,10 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
         body = await request.json()
         if str(body.get("instrument_id", "")).startswith("fixture:") and settings.env == "prod":
             raise ApiError("SCHEMA", "fixture instruments are refused", 422)
+        symbol, _mapped, reason = resolve_symbol(str(body.get("instrument_id", "")))
+        if symbol is None:
+            raise ApiError("UNMAPPED_SYMBOL", reason or "unmapped", 422)
+        body["instrument_id"] = symbol
         confidence = float(body.get("mapping_confidence", 1.0))
         if not accept_mapping(confidence):
             raise ApiError("UNMAPPED_SYMBOL", "mapping confidence below 0.9", 422)
