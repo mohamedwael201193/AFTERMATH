@@ -36,14 +36,24 @@ const TICKER_DOMAINS: Record<string, string> = {
   AMZN: "amazon.com",
   GOOGL: "abc.xyz",
   COIN: "coinbase.com",
+  MSTR: "strategy.com",
   QQQ: "invesco.com",
   SPY: "ssga.com",
   MU: "micron.com",
 };
 
-/** URLs tried in order for one ticker (uppercase, per icon policy). */
-export function tickerIconSources(_symbol: string): string[] {
-  return [];
+function equityTicker(symbol: string): string {
+  return symbol.toUpperCase().replace(/USDT$/, "");
+}
+
+/** URLs tried in order for one ticker. NVDAUSDT uses the NVDA logo. */
+export function tickerIconSources(symbol: string): string[] {
+  const t = equityTicker(symbol);
+  if (!t || t === "CYCLE") return [];
+  const sources = [`${PNG_CDN_BASE}/${t}.png`];
+  const domain = TICKER_DOMAINS[t];
+  if (domain) sources.push(`${FAVICON_CDN_BASE}?domain=${domain}&sz=64`);
+  return sources;
 }
 
 /** Remembers broken URLs across mounts so lists never re-request them. */
@@ -170,7 +180,7 @@ export function TickerIcon({
   className?: string;
   elevated?: boolean;
 }) {
-  const ticker = symbol.toUpperCase();
+  const ticker = equityTicker(symbol);
   const sources = useMemo(() => tickerIconSources(ticker), [ticker]);
 
   // Start past URLs that are known-broken from earlier mounts.
