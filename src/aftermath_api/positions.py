@@ -205,7 +205,15 @@ def mark_later(cost: dict, books: list[dict], now: datetime) -> dict:
     if bid <= 0 or ask < bid:
         return {"error": "mark_book_incomplete"}
     mid = (bid + ask) / 2
-    unrealized = side * qty * (mid - entry_vwap)
+    gross = side * qty * (mid - entry_vwap)
+    try:
+        entry_fee = float(entry["fee_usdt"])
+    except (KeyError, TypeError, ValueError):
+        entry_fee = None
+    if entry_fee is None or entry_fee < 0 or entry_fee != entry_fee:
+        unrealized = None
+    else:
+        unrealized = round(gross - entry_fee, 4)
     marked = dict(cost)
     marked.pop("outcome_bp", None)
     marked["mark"] = {
@@ -214,7 +222,9 @@ def mark_later(cost: dict, books: list[dict], now: datetime) -> dict:
         "ask": ask,
         "book_hash": digest,
         "marked_at": chosen.get("fetched_at_utc"),
-        "unrealized_usdt": round(unrealized, 4),
+        "gross_usdt": round(gross, 4),
+        "entry_fee_usdt": None if entry_fee is None else round(entry_fee, 4),
+        "unrealized_usdt": unrealized,
         "counted_outcome": False,
     }
     return {"status": "PAPER_FILLED", "changed": True, "cost_json": marked}

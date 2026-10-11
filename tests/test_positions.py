@@ -114,6 +114,14 @@ def test_a_book_before_the_horizon_is_a_mark_and_the_exit_waits():
     assert marked["cost_json"]["mark"]["book_hash"] == "mark-book"
     assert marked["cost_json"]["mark"]["mid"] == 100.5
     assert marked["cost_json"]["mark"]["counted_outcome"] is False
+    entry = opened["cost_json"]["entry"]
+    gross = float(entry["qty"]) * (100.5 - float(entry["vwap"]))
+    assert marked["cost_json"]["mark"]["unrealized_usdt"] == round(gross - float(entry["fee_usdt"]), 4)
+    unpaid = dict(opened["cost_json"])
+    unpaid["entry"] = {key: value for key, value in entry.items() if key != "fee_usdt"}
+    missing_fee = mark_later(unpaid, [mark_book], datetime.fromisoformat(mark_at))
+    assert missing_fee["cost_json"]["mark"]["unrealized_usdt"] is None
+    assert missing_fee["cost_json"]["mark"]["gross_usdt"] == round(gross, 4)
     assert "outcome_bp" not in marked["cost_json"]
     assert mark_later(marked["cost_json"], [mark_book], datetime.fromisoformat(mark_at))["changed"] is False
     opened["cost_json"]["funding_rates"] = [0.0001, 0.0001, 0.0001]
