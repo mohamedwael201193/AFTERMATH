@@ -99,7 +99,7 @@ def persist_observation(store, body: dict) -> dict:
     return {"event": event, "evidence": evidence}
 
 
-def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", event_fetch=None, model_transport=None, market_fetch=None) -> dict:
+def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", event_fetch=None, model_transport=None, market_fetch=None, hf1_scan=None) -> dict:
     now = datetime.now(timezone.utc)
     key = "paper-cycle:v2:" + now.strftime("%Y-%m-%dT%H")
     existing = store.decision_for_key(key)
@@ -214,6 +214,7 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", even
             "fetch_errors": len(errors),
             "model_calls": model_calls,
             "sec_edgar": "configured" if settings.sec_user_agent.strip() else "disabled",
+            "hf1": _hf1_detail(settings, now, hf1_scan),
         },
     })
     return {
@@ -222,6 +223,30 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", even
         "repeated": False,
         "reason": result["reason"],
         "receipt_id": None if receipt is None else receipt["id"],
+    }
+
+
+def _hf1_detail(settings, now: datetime, hf1_scan):
+    """Record a separate H-HF-1 scan. It cannot change the S-A decision or call the model."""
+    if hf1_scan is None and getattr(settings, "env", "") == "test":
+        return None
+    scanner = hf1_scan
+    if scanner is None:
+        from .strategies.hf1 import scan_live
+
+        scanner = scan_live
+    try:
+        report = scanner(now)
+    except Exception:
+        report = {"error": "scan_failed"}
+    if not isinstance(report, dict):
+        report = {"error": "scan_failed"}
+    return {
+        **report,
+        "strategy_id": "H-HF-1",
+        "counted_outcome": False,
+        "selected": False,
+        "model_called": False,
     }
 
 
