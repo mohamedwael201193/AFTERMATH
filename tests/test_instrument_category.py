@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from aftermath_api.connectors import contract_from_record, market_from_public
+from aftermath_api.connectors import contract_from_record, funding_history_from_record, market_from_public
 from aftermath_api.errors import ApiError
 from aftermath_api.execution_context import derive_execution
 from aftermath_api.paper import govern
@@ -283,3 +283,24 @@ def test_non_normal_status_is_refused():
     )
     assert derived["error"].startswith("incomplete_market:")
     assert "contract" in derived["error"]
+
+
+def test_funding_history_keeps_venue_rates_in_time_order():
+    rec = {
+        "params": {"productType": "USDT-FUTURES", "symbol": "NVDAUSDT"},
+        "data": [
+            {"symbol": "NVDAUSDT", "fundingRate": "0.0002", "fundingTime": "1760000000000"},
+            {"symbol": "NVDAUSDT", "fundingRate": "-0.0001", "fundingTime": "1759971200000"},
+        ],
+    }
+    prints = funding_history_from_record(rec, "NVDAUSDT")
+    assert [row["rate"] for row in prints] == [-0.0001, 0.0002]
+    assert funding_history_from_record({"params": {"productType": "USDT-FUTURES"}, "data": []}, "NVDAUSDT") == []
+    with pytest.raises(ApiError) as spot:
+        funding_history_from_record({"params": {"category": "SPOT"}, "data": []}, "NVDAUSDT")
+    assert "USDT-FUTURES" in spot.value.message
+    with pytest.raises(ApiError):
+        funding_history_from_record(
+            {"params": {"productType": "USDT-FUTURES"}, "data": [{"symbol": "BTCUSDT", "fundingRate": "0.0001", "fundingTime": "1760000000000"}]},
+            "NVDAUSDT",
+        )

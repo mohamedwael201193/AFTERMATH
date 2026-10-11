@@ -293,8 +293,11 @@ def close_later(cost: dict, books: list[dict], now: datetime) -> dict:
     closed_at = _parse(book.get("fetched_at_utc")) or now
     gross = int(cost["side"]) * qty * (float(exit_walk["walk"]["vwap"]) - float(entry["vwap"]))
     interval = cost.get("funding_interval_hours")
+    rates = cost.get("funding_rates")
+    if rates is None:
+        rates = _rates_from_prints((book.get("payload") or {}).get("funding_prints"), opened, closed_at, interval)
     funding, settlements, funding_source = _funding(
-        float(entry["filled_usdt"]), opened, closed_at, cost.get("funding_rates"), interval,
+        float(entry["filled_usdt"]), opened, closed_at, rates, interval,
     )
     fees = float(entry["fee_usdt"]) + float(exit_walk["walk"]["fee_usdt"])
     filled = float(entry["filled_usdt"])
@@ -313,7 +316,8 @@ def close_later(cost: dict, books: list[dict], now: datetime) -> dict:
             "funding_source": funding_source,
             "net_usdt": None if net is None else round(net, 6),
             "outcome_bp": None if net is None or not filled else round(net / filled * 1e4, 4),
-            "baselines": _baselines(cost, derived, opened, closed_at, cost.get("funding_rates"), interval),
+            "baselines": _baselines(cost, derived, opened, closed_at, rates, interval),
+            **({"funding_rates": [float(rate) for rate in rates]} if isinstance(rates, list) else {}),
             **_spread_field("exit_spread_bp", book),
         },
     }
@@ -509,6 +513,53 @@ def _later_book(books: list[dict], symbol: str, prior_hash: str | None, prior_ti
         if chosen is None or _parse(book.get("fetched_at_utc")) < _parse(chosen.get("fetched_at_utc")):
             chosen = book
     return chosen
+
+
+def funding_due(fill: dict, now: datetime) -> bool:
+    """A filled paper position whose horizon has arrived and still has no funding series."""
+    if fill.get("status") != "PAPER_FILLED":
+        return False
+    cost = fill.get("cost_json") or {}
+    if cost.get("outcome_bp") is not None or cost.get("funding_rates") is not None:
+        return False
+    if _interval_hours(cost.get("funding_interval_hours")) is None:
+        return False
+    opened = _parse(cost.get("opened_at"))
+    if opened is None or not isinstance(cost.get("symbol"), str) or not cost.get("symbol"):
+        return False
+    try:
+        horizon = float(cost.get("horizon_hours") or 0)
+    except (TypeError, ValueError):
+        return False
+    return now >= opened + timedelta(hours=horizon)
+
+
+def _rates_from_prints(prints, opened: datetime, closed: datetime, interval_hours) -> list[float] | None:
+    """In-window venue prints, oldest first. A short or long series is not padded and is not trimmed."""
+    interval = _interval_hours(interval_hours)
+    if interval is None or not isinstance(prints, list):
+        return None
+    expected = max(int((closed - opened).total_seconds() // (interval * 3600)), 0)
+    chosen = []
+    for item in prints:
+        if not isinstance(item, dict):
+            return None
+        ts = _parse(item.get("funding_time_utc"))
+        if ts is None:
+            return None
+        if not (opened < ts <= closed):
+            continue
+        raw = item.get("rate")
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            return None
+        rate = float(raw)
+        if rate != rate or rate in (float("inf"), float("-inf")):
+            return None
+        chosen.append((ts, rate))
+    chosen.sort(key=lambda row: row[0])
+    if len(chosen) != expected:
+        return None
+    return [rate for _ts, rate in chosen]
 
 
 def _interval_hours(value) -> float | None:

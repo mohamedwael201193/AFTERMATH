@@ -9,7 +9,7 @@ from pathlib import Path
 from .decide import abstain, decide_bounded
 from .execution_context import PAPER_EQUITY, derive_execution
 from .paper import govern
-from .positions import advance_positions
+from .positions import advance_positions, funding_due
 from .errors import ApiError
 from .ids import SCHEMA_VERSION, event_id, evidence_id, payload_hash, utc_now
 from .receipts import issue_receipt
@@ -99,7 +99,7 @@ def persist_observation(store, body: dict) -> dict:
     return {"event": event, "evidence": evidence}
 
 
-def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", event_fetch=None, model_transport=None, market_fetch=None, hf1_scan=None) -> dict:
+def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", event_fetch=None, model_transport=None, market_fetch=None, hf1_scan=None, funding_fetch=None) -> dict:
     now = datetime.now(timezone.utc)
     key = "paper-cycle:v2:" + now.strftime("%Y-%m-%dT%H")
     existing = store.decision_for_key(key)
@@ -151,6 +151,9 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", even
         except Exception as exc:
             errors.append(getattr(exc, "message", None) or "sec_fetch_failed")
     observations = list(observations) + list(filings)
+    if funding_fetch is None and getattr(settings, "env", "test") != "test":
+        funding_fetch = _live_funding_fetch()
+    annotate_due_funding(store, observations, now, funding_fetch)
     advance_positions(store, observations, now, signing_path=signing_path)
     links = []
     loaded = []
@@ -225,6 +228,46 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", even
         "reason": result["reason"],
         "receipt_id": None if receipt is None else receipt["id"],
     }
+
+
+def annotate_due_funding(store, observations: list[dict], now: datetime, funding_fetch) -> None:
+    """Copy venue history onto the exit book of a due position. A failed fetch leaves funding unset."""
+    if funding_fetch is None:
+        return
+    symbols = []
+    for fill in list(store.list_fills()):
+        cost = fill.get("cost_json") or {}
+        symbol = cost.get("symbol")
+        if funding_due(fill, now) and symbol not in symbols:
+            symbols.append(symbol)
+    loaded: dict[str, list] = {}
+    for symbol in symbols:
+        try:
+            prints = funding_fetch(symbol)
+        except Exception:
+            continue
+        if isinstance(prints, list):
+            loaded[symbol] = prints
+    for book in observations:
+        if book.get("event_type") != "book":
+            continue
+        prints = loaded.get(book.get("instrument_id"))
+        if prints is None:
+            continue
+        payload = dict(book.get("payload") or {})
+        payload["funding_prints"] = prints
+        book["payload"] = payload
+
+
+def _live_funding_fetch():
+    def fetch(symbol):
+        from .connectors import BitgetConnector
+
+        cache = Path("/tmp/aftermath-cache") if Path("/tmp").is_dir() else Path(".") / "cache"
+        cache.mkdir(parents=True, exist_ok=True)
+        return BitgetConnector(cache, mode="live").funding_history(symbol)
+
+    return fetch
 
 
 def _interval_field(context: dict) -> dict:

@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from aftermath_api.config import Settings
-from aftermath_api.cycle import run_paper_cycle
+from aftermath_api.cycle import annotate_due_funding, run_paper_cycle
 from aftermath_api.metrics import evaluate
 from aftermath_api.positions import close_later, enter_later, mark_later, paired_from_fills, portfolio_state, summarize
 from aftermath_api.store import MemoryStore
@@ -162,6 +162,95 @@ def test_funding_uses_the_contract_interval_and_does_not_assume_eight_hours():
     assert refused["cost_json"]["funding_source"] == "missing_interval"
     assert refused["cost_json"]["funding_usdt"] is None
     assert refused["cost_json"]["outcome_bp"] is None
+
+
+def test_exit_book_prints_price_funding_only_when_the_window_is_complete():
+    proposed = "2026-10-10T12:00:00+00:00"
+    opened_at = datetime.fromisoformat("2026-10-10T13:00:00+00:00")
+    exit_at = opened_at + timedelta(hours=24, seconds=1)
+    opened = enter_later(_pending(proposed, "proposal-book"), [_book(opened_at.isoformat(), "entry-book", 99.99, 100.01, [[99.99, 10]], [[100.0, 10]])])
+    cost = opened["cost_json"]
+    assert "funding_rates" not in cost
+    stamps = [opened_at + timedelta(hours=hours) for hours in (8, 16, 24)]
+    prints = [{"funding_time_utc": stamp.isoformat(), "rate": 0.0001} for stamp in stamps]
+    prints.append({"funding_time_utc": (opened_at - timedelta(hours=8)).isoformat(), "rate": 0.01})
+    exit_book = _book(exit_at.isoformat(), "exit-book", 100.99, 101.01, [[101.0, 10]], [[101.02, 10]])
+    exit_book["payload"]["funding_prints"] = prints
+    closed = close_later(cost, [exit_book], exit_at)
+    assert closed["cost_json"]["funding_source"] == "venue_funding"
+    assert closed["cost_json"]["funding_settlements"] == 3
+    assert closed["cost_json"]["funding_rates"] == [0.0001, 0.0001, 0.0001]
+    filled = float(cost["entry"]["filled_usdt"])
+    assert closed["cost_json"]["funding_usdt"] == round(filled * 0.0003, 6)
+    short = _book(exit_at.isoformat(), "exit-short", 100.99, 101.01, [[101.0, 10]], [[101.02, 10]])
+    short["payload"]["funding_prints"] = prints[:2]
+    refused = close_later(cost, [short], exit_at)
+    assert refused["cost_json"]["funding_source"] == "missing"
+    assert refused["cost_json"]["funding_usdt"] is None
+    assert refused["cost_json"]["outcome_bp"] is None
+    explicit = dict(cost)
+    explicit["funding_rates"] = [0.0, 0.0, 0.0]
+    priced = close_later(explicit, [short], exit_at)
+    assert priced["cost_json"]["funding_source"] == "venue_funding"
+    assert priced["cost_json"]["funding_usdt"] == 0.0
+
+
+class _Fills:
+    def __init__(self, fill):
+        self.fill = fill
+
+    def list_fills(self):
+        return [self.fill]
+
+
+def test_a_due_position_receives_funding_history_on_its_exit_book():
+    opened = datetime.fromisoformat("2026-10-10T13:00:00+00:00")
+    now = opened + timedelta(hours=24, seconds=1)
+    fill = {
+        "status": "PAPER_FILLED",
+        "cost_json": {
+            "symbol": "NVDAUSDT",
+            "opened_at": opened.isoformat(),
+            "horizon_hours": 24,
+            "funding_interval_hours": 8,
+        },
+    }
+    prints = [{"funding_time_utc": (opened + timedelta(hours=8)).isoformat(), "rate": 0.0001}]
+    book = _book(now.isoformat(), "exit-book", 100.99, 101.01, [[101.0, 10]], [[101.02, 10]])
+    seen = []
+
+    def fetch(symbol):
+        seen.append(symbol)
+        return prints
+
+    annotate_due_funding(_Fills(fill), [book], now, fetch)
+    assert seen == ["NVDAUSDT"]
+    assert book["payload"]["funding_prints"] == prints
+
+    early_book = _book(opened.isoformat(), "early-book", 99.99, 100.01, [[99.99, 10]], [[100.0, 10]])
+    annotate_due_funding(_Fills(fill), [early_book], opened + timedelta(hours=1), fetch)
+    assert "funding_prints" not in early_book["payload"]
+    assert seen == ["NVDAUSDT"]
+
+    failed = _book(now.isoformat(), "failed-book", 100.99, 101.01, [[101.0, 10]], [[101.02, 10]])
+
+    def boom(_symbol):
+        raise RuntimeError("funding history unavailable")
+
+    annotate_due_funding(_Fills(fill), [failed], now, boom)
+    assert "funding_prints" not in failed["payload"]
+
+    rated = {
+        "status": "PAPER_FILLED",
+        "cost_json": {**fill["cost_json"], "funding_rates": [0.0, 0.0, 0.0]},
+    }
+    untouched = _book(now.isoformat(), "rated-book", 100.99, 101.01, [[101.0, 10]], [[101.02, 10]])
+
+    def unexpected(_symbol):
+        raise AssertionError("funding history was fetched for a position that already has rates")
+
+    annotate_due_funding(_Fills(rated), [untouched], now, unexpected)
+    assert "funding_prints" not in untouched["payload"]
 
 
 def test_missing_funding_is_not_replaced_with_one_basis_point():

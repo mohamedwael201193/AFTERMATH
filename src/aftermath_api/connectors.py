@@ -346,6 +346,38 @@ def funding_from_record(rec: dict, symbol: str) -> dict:
     return parsed
 
 
+def funding_history_from_record(rec: dict, symbol: str) -> list[dict]:
+    """Chronological venue settlements. An empty page is an empty list, not a zero rate."""
+    params = rec.get("params") if isinstance(rec.get("params"), dict) else {}
+    category = params.get("productType") or params.get("category")
+    if category not in (None, "", FUTURES_CATEGORY):
+        raise ApiError("SCHEMA", "funding category is not USDT-FUTURES", 422)
+    data = rec.get("data")
+    if data is None:
+        data = []
+    if not isinstance(data, list):
+        raise ApiError("SCHEMA", "funding history empty", 422)
+    prints = []
+    for row in data:
+        if not isinstance(row, dict):
+            raise ApiError("SCHEMA", "funding history row invalid", 422)
+        if row.get("symbol") not in (None, "", symbol):
+            raise ApiError("SCHEMA", "funding symbol mismatch", 422)
+        raw = row.get("fundingRate")
+        if isinstance(raw, bool):
+            raise ApiError("SCHEMA", "funding rate invalid", 422)
+        try:
+            rate = float(raw)
+            stamp = datetime.fromtimestamp(int(row["fundingTime"]) / 1000, timezone.utc)
+        except (TypeError, ValueError, KeyError, OSError) as exc:
+            raise ApiError("SCHEMA", "funding history row invalid", 422) from exc
+        if not _finite_number(rate):
+            raise ApiError("SCHEMA", "funding rate invalid", 422)
+        prints.append({"funding_time_utc": stamp.isoformat(), "rate": rate})
+    prints.sort(key=lambda item: item["funding_time_utc"])
+    return prints
+
+
 def market_from_public(connector, symbol: str, end_ms: int, n_precedents: int) -> dict | None:
     """Live contract and closed candles. A missing series returns None instead of a zero hedge."""
     if not isinstance(n_precedents, int) or isinstance(n_precedents, bool) or n_precedents < 0:
@@ -445,6 +477,15 @@ class BitgetConnector:
         except Exception as exc:
             raise ApiError("SOURCE_UNAVAILABLE", "bitget funding failed", 503, retryable=True) from exc
         return funding_from_record(rec, symbol)
+
+    def funding_history(self, symbol: str) -> list[dict]:
+        if symbol.startswith("fixture:"):
+            raise ApiError("SCHEMA", "fixture instruments are refused", 422)
+        try:
+            rec = self.client.funding_history(symbol, page_size=100)
+        except Exception as exc:
+            raise ApiError("SOURCE_UNAVAILABLE", "bitget funding history failed", 503, retryable=True) from exc
+        return funding_history_from_record(rec, symbol)
 
     def depth(self, symbol: str) -> dict:
         if symbol.startswith("fixture:"):
