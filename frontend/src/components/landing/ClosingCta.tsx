@@ -71,6 +71,7 @@ export function LandingFooter() {
           <a href="#product" className="transition-colors hover:text-forest">Product</a>
           <a href="#how-it-works" className="transition-colors hover:text-forest">How it works</a>
           <a href="#trust" className="transition-colors hover:text-forest">Trust & safety</a>
+          <a href="/paper-trading-log" className="transition-colors hover:text-forest">Paper log</a>
         </nav>
         <p className="text-xs leading-relaxed text-ink-soft sm:max-w-xs sm:text-right">
           Preview workspace — all events, prices, decisions, and receipts are

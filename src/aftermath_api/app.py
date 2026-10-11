@@ -14,7 +14,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from .auth import require_decision, require_job, require_reader
 from .config import ROOT, Settings, load_settings
@@ -25,6 +25,7 @@ from .gate import core_blockers, has_order_book
 from .identity import accept_mapping, resolve_symbol
 from .ids import SCHEMA_VERSION, event_id, evidence_id, payload_hash, utc_now
 from .paper import govern, paper_fill
+from .paper_log import cycle_rows, methodology_html, to_csv, trade_rows, CYCLE_COLUMNS, TRADE_COLUMNS
 from .metrics import evaluate
 from .positions import paired_from_fills, summarize
 from .receipts import chain_intact, issue_receipt, verify_line
@@ -111,6 +112,23 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
         response.headers["Cache-Control"] = "no-store"
         log.info(json.dumps({"path": request.url.path, "status": response.status_code}))
         return response
+
+    @app.get("/paper-trading-log.csv")
+    def paper_trading_log():
+        body = to_csv(TRADE_COLUMNS, trade_rows(store.list_fills()))
+        return PlainTextResponse(body, media_type="text/csv; charset=utf-8")
+
+    @app.get("/paper-cycle-log.csv")
+    def paper_cycle_log():
+        runs = store.list_runs() if hasattr(store, "list_runs") else []
+        body = to_csv(CYCLE_COLUMNS, cycle_rows(runs))
+        return PlainTextResponse(body, media_type="text/csv; charset=utf-8")
+
+    @app.get("/paper-trading-log")
+    def paper_trading_methodology():
+        trades = trade_rows(store.list_fills())
+        runs = store.list_runs() if hasattr(store, "list_runs") else []
+        return HTMLResponse(methodology_html(trades, cycle_rows(runs)))
 
     @app.get("/health")
     def health():

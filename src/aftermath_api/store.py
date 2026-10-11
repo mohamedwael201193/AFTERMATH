@@ -240,6 +240,9 @@ class MemoryStore:
     def list_fills(self) -> list:
         return list(self.fills.values())
 
+    def list_runs(self) -> list:
+        return list(self.runs.values())
+
     def update_fill(self, fill_id: str, **fields) -> dict | None:
         for row in self.fills.values():
             if row.get("id") == fill_id:
@@ -595,6 +598,13 @@ class PostgresStore:
                 f"SELECT id, idempotency_key, status, reason, decision_id, started_at_utc, finished_at_utc, detail FROM {self.schema}.paper_runs ORDER BY started_at_utc DESC LIMIT 1"
             ).fetchone()
         return _run_row(row) if row else None
+
+    def list_runs(self) -> list:
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT id, idempotency_key, status, reason, decision_id, started_at_utc, finished_at_utc, detail FROM {self.schema}.paper_runs ORDER BY started_at_utc"
+            ).fetchall()
+        return [_run_row(row) for row in rows]
 
     def dashboard_counts(self) -> dict:
         """Counts and the latest run in one database session."""
