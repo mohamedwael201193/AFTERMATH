@@ -98,6 +98,12 @@ def advance_positions(store, observations: list[dict], now: datetime, signing_pa
             _sign_fill(store, signing_path, fill["id"], opened["status"], opened["cost_json"])
         elif fill.get("status") == "PAPER_FILLED" and cost.get("outcome_bp") is None:
             closed = close_later(cost, books, now)
+            if closed.get("error") == "horizon_open":
+                marked = mark_later(cost, books, now)
+                if marked.get("changed"):
+                    store.update_fill(fill["id"], status="PAPER_FILLED", cost_json=marked["cost_json"])
+                    _sign_fill(store, signing_path, fill["id"], "PAPER_FILLED", marked["cost_json"])
+                continue
             if closed.get("error"):
                 continue
             store.update_fill(fill["id"], status="CLOSED", cost_json=closed["cost_json"])
@@ -154,6 +160,66 @@ def enter_later(pending: dict, books: list[dict]) -> dict:
     }
 
 
+def mark_later(cost: dict, books: list[dict], now: datetime) -> dict:
+    """Latest book while the hold is open. A mark is not a fill and has no outcome."""
+    opened = _parse(cost.get("opened_at"))
+    if opened is None:
+        return {"error": "missing_entry_time"}
+    horizon = float(cost.get("horizon_hours") or 0)
+    if now >= opened + timedelta(hours=horizon):
+        return {"error": "horizon_reached"}
+    entry = cost.get("entry") or {}
+    try:
+        entry_vwap = float(entry["vwap"])
+        qty = float(entry.get("qty") or 0)
+        side = int(cost["side"])
+    except (KeyError, TypeError, ValueError):
+        return {"error": "missing_entry"}
+    if entry_vwap <= 0 or qty <= 0:
+        return {"error": "missing_entry"}
+    chosen = None
+    chosen_at = None
+    for book in books:
+        if book.get("instrument_id") != cost.get("symbol") or book.get("event_type") not in (None, "book"):
+            continue
+        payload = book.get("payload") or {}
+        if payload.get("raw_sha256") == cost.get("entry_book_hash"):
+            continue
+        fetched = _parse(book.get("fetched_at_utc"))
+        if fetched is None or fetched <= opened or fetched > now:
+            continue
+        if chosen_at is None or fetched > chosen_at:
+            chosen = book
+            chosen_at = fetched
+    if chosen is None:
+        return {"error": "no_mark_book"}
+    payload = chosen.get("payload") or {}
+    digest = payload.get("raw_sha256")
+    if digest and digest == (cost.get("mark") or {}).get("book_hash"):
+        return {"status": "PAPER_FILLED", "changed": False, "cost_json": cost}
+    try:
+        bid = float(payload["bid"])
+        ask = float(payload["ask"])
+    except (KeyError, TypeError, ValueError):
+        return {"error": "mark_book_incomplete"}
+    if bid <= 0 or ask < bid:
+        return {"error": "mark_book_incomplete"}
+    mid = (bid + ask) / 2
+    unrealized = side * qty * (mid - entry_vwap)
+    marked = dict(cost)
+    marked.pop("outcome_bp", None)
+    marked["mark"] = {
+        "mid": mid,
+        "bid": bid,
+        "ask": ask,
+        "book_hash": digest,
+        "marked_at": chosen.get("fetched_at_utc"),
+        "unrealized_usdt": round(unrealized, 4),
+        "counted_outcome": False,
+    }
+    return {"status": "PAPER_FILLED", "changed": True, "cost_json": marked}
+
+
 def _approved_fee(cost: dict) -> float | None:
     """The contract taker fee approved with the trade. A book snapshot carries no fee of its own."""
     try:
@@ -170,9 +236,16 @@ def close_later(cost: dict, books: list[dict], now: datetime) -> dict:
     if opened is None:
         return {"error": "missing_entry_time"}
     horizon = float(cost.get("horizon_hours") or 0)
-    if now < opened + timedelta(hours=horizon):
+    horizon_at = opened + timedelta(hours=horizon)
+    if now < horizon_at:
         return {"error": "horizon_open"}
-    book = _later_book(books, cost.get("symbol"), cost.get("entry_book_hash"), cost.get("opened_at"))
+    # The first book after entry is not the exit. The exit is the first book at the horizon.
+    book = _later_book(
+        books,
+        cost.get("symbol"),
+        cost.get("entry_book_hash"),
+        (horizon_at - timedelta(microseconds=1)).isoformat(),
+    )
     if book is None:
         return {"error": "no_exit_book"}
     entry = cost.get("entry") or {}

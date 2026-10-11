@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from aftermath_api.config import Settings
 from aftermath_api.cycle import run_paper_cycle
 from aftermath_api.metrics import evaluate
-from aftermath_api.positions import close_later, enter_later, paired_from_fills, portfolio_state, summarize
+from aftermath_api.positions import close_later, enter_later, mark_later, paired_from_fills, portfolio_state, summarize
 from aftermath_api.store import MemoryStore
 from tests.test_events import _settings
 
@@ -98,6 +98,31 @@ def test_later_book_entry_and_exit_match_the_cost_model():
     report = evaluate(paired_from_fills([{"cost_json": closed["cost_json"]}]))
     assert report["status"] == "INSUFFICIENT_DATA"
     assert report["sample_size"] == 1
+
+
+def test_a_book_before_the_horizon_is_a_mark_and_the_exit_waits():
+    proposed = "2026-10-10T12:00:00+00:00"
+    opened_at = "2026-10-10T13:00:00+00:00"
+    mark_at = "2026-10-10T14:00:00+00:00"
+    exit_at = (datetime.fromisoformat(opened_at) + timedelta(hours=24, seconds=1)).isoformat()
+    opened = enter_later(_pending(proposed, "proposal-book"), [_book(opened_at, "entry-book", 99.99, 100.01, [[99.99, 10]], [[100.0, 10]])])
+    mark_book = _book(mark_at, "mark-book", 100.49, 100.51, [[100.49, 10]], [[100.51, 10]])
+    exit_book = _book(exit_at, "exit-book", 100.99, 101.01, [[101.0, 10]], [[101.02, 10]])
+    marked = mark_later(opened["cost_json"], [mark_book, exit_book], datetime.fromisoformat(mark_at))
+    assert marked["changed"] is True
+    assert marked["status"] == "PAPER_FILLED"
+    assert marked["cost_json"]["mark"]["book_hash"] == "mark-book"
+    assert marked["cost_json"]["mark"]["mid"] == 100.5
+    assert marked["cost_json"]["mark"]["counted_outcome"] is False
+    assert "outcome_bp" not in marked["cost_json"]
+    assert mark_later(marked["cost_json"], [mark_book], datetime.fromisoformat(mark_at))["changed"] is False
+    opened["cost_json"]["funding_rates"] = [0.0001, 0.0001, 0.0001]
+    marked["cost_json"]["funding_rates"] = [0.0001, 0.0001, 0.0001]
+    closed = close_later(marked["cost_json"], [mark_book, exit_book], datetime.fromisoformat(exit_at))
+    assert closed["cost_json"]["exit_book_hash"] == "exit-book"
+    assert closed["cost_json"]["outcome_bp"] == 84.94
+    too_early = close_later(marked["cost_json"], [mark_book, exit_book], datetime.fromisoformat(mark_at))
+    assert too_early == {"error": "horizon_open"}
 
 
 def test_missing_funding_is_not_replaced_with_one_basis_point():

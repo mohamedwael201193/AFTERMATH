@@ -66,6 +66,44 @@ def test_append_only_schema_and_restart_read():
         assert any(item["id"] == "evn_t" for item in listed.json()["items"])
         store2 = PostgresStore(url, schema)
         assert store2.get_event("evn_t")["instrument_id"] == "BTCUSDT"
+        store2.insert_decision({
+            "id": "dec_restart",
+            "status": "ABSTAIN",
+            "decision_source": "abstain",
+            "prompt_hash": "p",
+            "input_snapshot_hash": "s",
+            "schema_version": 1,
+            "reason": "awaiting_next_book",
+            "idempotency_key": "restart-fill",
+            "created_at_utc": "2026-10-11T04:00:00+00:00",
+        }, [])
+        marked = {
+            "symbol": "NVDAUSDT",
+            "mark": {"mid": 101.0, "book_hash": "mark-book", "counted_outcome": False},
+        }
+        store2.insert_fill({
+            "id": "fill_restart",
+            "decision_id": "dec_restart",
+            "idempotency_key": "restart-fill:entry",
+            "status": "PAPER_FILLED",
+            "cost_json": marked,
+            "created_at_utc": "2026-10-11T04:00:00+00:00",
+        })
+        repeated = store2.insert_fill({
+            "id": "fill_other",
+            "decision_id": "dec_restart",
+            "idempotency_key": "restart-fill:entry",
+            "status": "CLOSED",
+            "cost_json": {"outcome_bp": 1},
+            "created_at_utc": "2026-10-11T05:00:00+00:00",
+        })
+        assert repeated["id"] == "fill_restart"
+        restarted = PostgresStore(url, schema)
+        seen = restarted.fill_for_key("restart-fill:entry")
+        assert seen["status"] == "PAPER_FILLED"
+        assert seen["cost_json"]["mark"]["mid"] == 101.0
+        assert seen["cost_json"]["mark"]["counted_outcome"] is False
+        assert "outcome_bp" not in seen["cost_json"]
     finally:
         try:
             conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
