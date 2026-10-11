@@ -121,6 +121,9 @@ def test_a_book_before_the_horizon_is_a_mark_and_the_exit_waits():
     closed = close_later(marked["cost_json"], [mark_book, exit_book], datetime.fromisoformat(exit_at))
     assert closed["cost_json"]["exit_book_hash"] == "exit-book"
     assert closed["cost_json"]["outcome_bp"] == 84.94
+    pair = paired_from_fills([{"cost_json": closed["cost_json"]}])[0]
+    assert abs(pair["hold_hours"] - (24 + 1 / 3600)) < 1e-6
+    assert pair["notional_usdt"] == closed["cost_json"]["entry"]["filled_usdt"]
     too_early = close_later(marked["cost_json"], [mark_book, exit_book], datetime.fromisoformat(mark_at))
     assert too_early == {"error": "horizon_open"}
 

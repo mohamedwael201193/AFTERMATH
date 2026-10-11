@@ -1,6 +1,7 @@
 import json
 import random
 import statistics
+from datetime import datetime
 from pathlib import Path
 
 from aftermath_api.metrics import (
@@ -161,6 +162,47 @@ def test_golden_fixture_matches_hand_formulas():
     low, high = _bootstrap_bounds(differences)
     assert report["paired_agent_minus_fixed_bp"]["bootstrap_95"]["low"] == low
     assert report["paired_agent_minus_fixed_bp"]["bootstrap_95"]["high"] == high
+
+
+def test_a_small_sample_does_not_grow_an_exposure_or_a_sharpe():
+    row = _pair(10, "2026-10-01T12:00:00+00:00")
+    row["hold_hours"] = 24
+    row["notional_usdt"] = 100
+    report = evaluate([row, row])
+    assert report["status"] == "INSUFFICIENT_DATA"
+    assert "exposure" not in report
+    assert "selection" not in report
+
+
+def test_observed_exposure_and_one_trial_selection_match_the_helpers():
+    rows = []
+    for index in range(15):
+        row = _pair(10, f"2026-01-{index + 1:02d}T12:00:00+00:00")
+        row["hold_hours"] = 24
+        row["notional_usdt"] = 100
+        rows.append(row)
+    for index in range(15):
+        row = _pair(-4, f"2026-02-{index + 1:02d}T12:00:00+00:00")
+        row["hold_hours"] = 24
+        row["notional_usdt"] = 100
+        rows.append(row)
+    report = evaluate(rows)
+    assert report["status"] == "OBSERVED"
+    first_open = datetime.fromisoformat("2025-12-31T12:00:00+00:00")
+    last_close = datetime.fromisoformat("2026-02-15T12:00:00+00:00")
+    window = (last_close - first_open).total_seconds() / 3600
+    assert report["exposure"]["hold_hours"] == 720
+    assert report["exposure"]["window_hours"] == round(window, 4)
+    assert report["exposure"]["exposure"] == round(exposure_fraction(720, window), 4)
+    assert report["exposure"]["turnover_per_hour"] == round(turnover_rate(3000, window), 4)
+    values = [10.0] * 15 + [-4.0] * 15
+    raw = statistics.fmean(values) / statistics.stdev(values)
+    skew, kurtosis = moment_skew_kurtosis(values)
+    assert report["selection"]["n_trials"] == 1
+    assert report["selection"]["deflated_sharpe"] == round(deflated_sharpe(raw, 30, 1, skew, kurtosis), 4)
+    probability = one_sided_bootstrap_p(values)
+    assert report["selection"]["bootstrap_p_mean_gt_0"] == round(probability, 4)
+    assert report["selection"]["bonferroni_p"] == round(bonferroni(probability, 1), 4)
 
 
 def test_additive_drawdown_exposure_turnover_and_bonferroni():

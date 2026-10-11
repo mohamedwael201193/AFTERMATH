@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import random
 import statistics
+from datetime import datetime, timedelta, timezone
 
 MIN_PAIRS = 30
 MIN_NONZERO = 15
@@ -51,6 +52,10 @@ def evaluate(pairs: list[dict]) -> dict:
         report["costs"] = costs
     violations = sum(1 for row in rows if row.get("risk_control_violation") is True)
     report["risk_control_violation_rate"] = round(violations / len(rows), 4)
+    exposure = _exposure_block(rows)
+    if exposure is not None:
+        report["exposure"] = exposure
+    report["selection"] = _selection(agent_values)
     report["note"] = "Observed paper comparison on the registered window. This is not a profitability claim."
     return report
 
@@ -111,6 +116,65 @@ def _bootstrap(differences: list[float]) -> dict:
     low = means[int(0.025 * (BOOTSTRAP_DRAWS - 1))]
     high = means[int(0.975 * (BOOTSTRAP_DRAWS - 1))]
     return {"low": round(low, 4), "high": round(high, 4), "draws": BOOTSTRAP_DRAWS, "seed": BOOTSTRAP_SEED}
+
+
+def _exposure_block(rows: list[dict]) -> dict | None:
+    """Hold time over the span from the first open to the last close. Missing hours are omitted, not zero."""
+    if any("hold_hours" not in row for row in rows):
+        return None
+    spans = []
+    for row in rows:
+        end = _parse_iso(row.get("closed_at"))
+        try:
+            hold = float(row["hold_hours"])
+        except (TypeError, ValueError):
+            return None
+        if end is None or hold < 0 or hold != hold:
+            return None
+        spans.append((end - timedelta(hours=hold), end, hold))
+    window = (max(end for _start, end, _hold in spans) - min(start for start, _end, _hold in spans)).total_seconds() / 3600
+    if window <= 0:
+        return None
+    held = sum(hold for _start, _end, hold in spans)
+    block = {
+        "hold_hours": round(held, 4),
+        "window_hours": round(window, 4),
+        "exposure": round(exposure_fraction(held, window), 4),
+    }
+    if all("notional_usdt" in row for row in rows):
+        try:
+            notional = sum(float(row["notional_usdt"]) for row in rows)
+        except (TypeError, ValueError):
+            return block
+        if notional == notional and notional >= 0:
+            block["turnover_per_hour"] = round(turnover_rate(notional, window), 4)
+    return block
+
+
+def _selection(values: list[float]) -> dict:
+    """One preregistered comparison. The benchmark Sharpe is 0, and Bonferroni uses k = 1."""
+    raw = sharpe_ratio(values)
+    moments = moment_skew_kurtosis(values)
+    deflated = None if raw is None or moments is None else deflated_sharpe(raw, len(values), 1, moments[0], moments[1])
+    probability = one_sided_bootstrap_p(values)
+    return {
+        "n_trials": 1,
+        "deflated_sharpe": None if deflated is None else round(deflated, 4),
+        "bootstrap_p_mean_gt_0": round(probability, 4),
+        "bonferroni_p": round(bonferroni(probability, 1), 4),
+    }
+
+
+def _parse_iso(value) -> datetime | None:
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _complete(row: dict) -> bool:

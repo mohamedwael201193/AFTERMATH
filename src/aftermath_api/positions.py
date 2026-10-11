@@ -305,6 +305,17 @@ def paired_from_fills(fills: list[dict]) -> list[dict]:
             "random_bp": float(baselines["random_bp"]),
             "no_trade_bp": float(baselines["no_trade_bp"]),
         }
+        opened = _parse(cost.get("opened_at"))
+        closed = _parse(cost.get("closed_at"))
+        if opened is not None and closed is not None and closed >= opened:
+            pair["hold_hours"] = (closed - opened).total_seconds() / 3600
+        entry = cost.get("entry") or {}
+        try:
+            notional = float(entry.get("filled_usdt") or cost.get("notional"))
+        except (TypeError, ValueError):
+            notional = None
+        if notional is not None and notional > 0:
+            pair["notional_usdt"] = notional
         pair.update(_pair_cost_fields(cost))
         pairs.append(pair)
     return pairs
