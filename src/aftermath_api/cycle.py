@@ -273,6 +273,22 @@ def _live_funding_fetch():
     return fetch
 
 
+def _baseline_fields(loaded: list[dict], result: dict) -> dict:
+    fields = {}
+    for row in loaded:
+        event = row.get("event") or {}
+        if event.get("event_type") != "filing":
+            continue
+        accession = (event.get("payload") or {}).get("accession")
+        if isinstance(accession, str) and accession:
+            fields["accession"] = accession
+        break
+    residual = ((result.get("decision_input") or {}).get("residual") or {}).get("residual_bp")
+    if isinstance(residual, (int, float)) and not isinstance(residual, bool):
+        fields["post_acceptance_bp"] = float(residual)
+    return fields
+
+
 def _interval_field(context: dict) -> dict:
     value = context.get("funding_interval_hours")
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -547,5 +563,6 @@ def _hold_if_approved(result: dict, loaded: list[dict], rows, store, now, market
         "proposal_fetched_at": derived["proposal_fetched_at"],
         "fee_rate": derived["fee_rate"],
         **_interval_field(derived["context"]),
+        **_baseline_fields(loaded, result),
     }
     return result

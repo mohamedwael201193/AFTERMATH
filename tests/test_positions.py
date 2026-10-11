@@ -41,6 +41,8 @@ def _pending(when: str, digest: str):
         "proposal_fetched_at": when,
         "fee_rate": 0.0006,
         "funding_interval_hours": 8,
+        "post_acceptance_bp": 50.0,
+        "accession": "0001045810-26-000073",
     }
 
 
@@ -96,8 +98,9 @@ def test_later_book_entry_and_exit_match_the_cost_model():
     assert closed["cost_json"]["exit_book_hash"] == "exit-book"
     baselines = closed["cost_json"]["baselines"]
     assert baselines["fixed_sign_bp"] == 84.94
+    assert baselines["fixed_sign_side"] == 1
     assert baselines["llm_off_bp"] == 0
-    assert baselines["llm_off_policy"] == "identical_to_no_trade"
+    assert baselines["llm_off_policy"] == "same_column_as_no_trade"
     assert baselines["no_trade_bp"] == 0
     assert baselines["random_bp"] is not None
     report = evaluate(paired_from_fills([{"cost_json": closed["cost_json"]}]))
@@ -139,6 +142,35 @@ def test_a_book_before_the_horizon_is_a_mark_and_the_exit_waits():
     assert pair["notional_usdt"] == closed["cost_json"]["entry"]["filled_usdt"]
     too_early = close_later(marked["cost_json"], [mark_book, exit_book], datetime.fromisoformat(mark_at))
     assert too_early == {"error": "horizon_open"}
+
+
+def test_short_receives_positive_funding():
+    proposed = "2026-10-10T12:00:00+00:00"
+    opened_at = "2026-10-10T13:00:00+00:00"
+    exit_at = (datetime.fromisoformat(opened_at) + timedelta(hours=24, seconds=1)).isoformat()
+    pending = _pending(proposed, "proposal-book")
+    pending["side"] = -1
+    pending["action"] = "SHORT"
+    pending["post_acceptance_bp"] = -25.0
+    opened = enter_later(pending, [_book(opened_at, "entry-book", 99.99, 100.01, [[99.99, 10]], [[100.0, 10]])])
+    opened["cost_json"]["funding_rates"] = [0.0001, 0.0001, 0.0001]
+    closed = close_later(
+        opened["cost_json"],
+        [_book(exit_at, "exit-book", 100.99, 101.01, [[101.0, 10]], [[101.02, 10]])],
+        datetime.fromisoformat(exit_at),
+    )
+    filled = closed["cost_json"]["entry"]["filled_usdt"]
+    assert closed["cost_json"]["funding_usdt"] == round(-filled * 0.0003, 6)
+    long = enter_later(_pending(proposed, "proposal-book"), [_book(opened_at, "entry-book", 99.99, 100.01, [[99.99, 10]], [[100.0, 10]])])
+    long["cost_json"]["funding_rates"] = [0.0001, 0.0001, 0.0001]
+    long["cost_json"]["post_acceptance_bp"] = -25.0
+    compared = close_later(
+        long["cost_json"],
+        [_book(exit_at, "exit-book", 100.99, 101.01, [[101.0, 10]], [[101.02, 10]])],
+        datetime.fromisoformat(exit_at),
+    )
+    assert compared["cost_json"]["baselines"]["fixed_sign_side"] == -1
+    assert compared["cost_json"]["baselines"]["fixed_sign_bp"] != compared["cost_json"]["outcome_bp"]
 
 
 def test_funding_uses_the_contract_interval_and_does_not_assume_eight_hours():

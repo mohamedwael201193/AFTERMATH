@@ -297,7 +297,7 @@ def close_later(cost: dict, books: list[dict], now: datetime) -> dict:
     if rates is None:
         rates = _rates_from_prints((book.get("payload") or {}).get("funding_prints"), opened, closed_at, interval)
     funding, settlements, funding_source = _funding(
-        float(entry["filled_usdt"]), opened, closed_at, rates, interval,
+        float(entry["filled_usdt"]), opened, closed_at, rates, interval, int(cost["side"]),
     )
     fees = float(entry["fee_usdt"]) + float(exit_walk["walk"]["fee_usdt"])
     filled = float(entry["filled_usdt"])
@@ -413,14 +413,19 @@ def _baselines(cost: dict, exit_derived: dict, opened: datetime, closed_at: date
         return no_trade
     if profile is None:
         return no_trade
-    fixed = _arm_bp(1, notional, entry_ref, profile, exit_derived["ref_price"], exit_profile, fee, opened, closed_at, rates, interval_hours)
-    seed = hashlib.sha256(f"{cost.get('symbol')}|{cost.get('opened_at')}".encode()).digest()
-    random_side = 1 if seed[0] % 2 == 0 else -1
-    random_bp = _arm_bp(random_side, notional, entry_ref, profile, exit_derived["ref_price"], exit_profile, fee, opened, closed_at, rates, interval_hours)
+    fixed_side = _residual_side(cost.get("post_acceptance_bp"))
+    fixed = None
+    if fixed_side is not None:
+        fixed = _arm_bp(fixed_side, notional, entry_ref, profile, exit_derived["ref_price"], exit_profile, fee, opened, closed_at, rates, interval_hours)
+    random_bp = None
+    random_side = _random_side(cost.get("accession"))
+    if random_side is not None:
+        random_bp = _arm_bp(random_side, notional, entry_ref, profile, exit_derived["ref_price"], exit_profile, fee, opened, closed_at, rates, interval_hours)
     return {
         "fixed_sign_bp": fixed,
+        "fixed_sign_side": fixed_side,
         "llm_off_bp": 0.0,
-        "llm_off_policy": "identical_to_no_trade",
+        "llm_off_policy": "same_column_as_no_trade",
         "random_bp": random_bp,
         "no_trade_bp": 0.0,
     }
@@ -435,7 +440,9 @@ def _arm_bp(side: int, notional: float, entry_ref: float, entry_profile: dict, e
     if exit_walk["status"] != "PAPER_FILLED":
         return None
     gross = side * qty * (float(exit_walk["walk"]["vwap"]) - float(entry["walk"]["vwap"]))
-    funding, _settlements, _source = _funding(float(entry["walk"]["filled_usdt"]), opened, closed_at, rates, interval_hours)
+    funding, _settlements, _source = _funding(
+        float(entry["walk"]["filled_usdt"]), opened, closed_at, rates, interval_hours, side,
+    )
     if funding is None:
         return None
     net = gross - float(entry["walk"]["fee_usdt"]) - float(exit_walk["walk"]["fee_usdt"]) - funding
@@ -571,8 +578,33 @@ def _interval_hours(value) -> float | None:
     return hours
 
 
-def _funding(notional: float, start: datetime, end: datetime, rates=None, interval_hours=None) -> tuple[float | None, int, str]:
-    """Use venue prints, including a real zero. The interval comes from the contract, not from an 8-hour guess."""
+def _residual_side(value) -> int | None:
+    """Fixed-sign follows the post-acceptance residual. A missing residual is not a long."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if number != number or number == 0:
+        return None
+    return 1 if number > 0 else -1
+
+
+def _prereg_sha256() -> str | None:
+    path = Path(__file__).resolve().parents[2] / "docs" / "PREREG_PRODUCTION_V2.md"
+    if not path.is_file():
+        return None
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _random_side(accession) -> int | None:
+    digest = _prereg_sha256()
+    if digest is None or not isinstance(accession, str) or not accession:
+        return None
+    seed = hashlib.sha256(f"{digest}|{accession}".encode()).digest()
+    return 1 if seed[0] % 2 == 0 else -1
+
+
+def _funding(notional: float, start: datetime, end: datetime, rates=None, interval_hours=None, side: int = 1) -> tuple[float | None, int, str]:
+    """Positive venue rate is paid by a long and received by a short. The interval comes from the contract."""
     interval = _interval_hours(interval_hours)
     if interval is None:
         return None, 0, "missing_interval"
@@ -584,7 +616,9 @@ def _funding(notional: float, start: datetime, end: datetime, rates=None, interv
     used = rates[:settlements]
     if any(isinstance(rate, bool) or not isinstance(rate, (int, float)) for rate in used):
         return None, settlements, "missing"
-    return notional * sum(float(rate) for rate in used), settlements, "venue_funding"
+    if side not in (1, -1):
+        return None, settlements, "missing"
+    return side * notional * sum(float(rate) for rate in used), settlements, "venue_funding"
 
 
 def _parse(value: str | None) -> datetime | None:
