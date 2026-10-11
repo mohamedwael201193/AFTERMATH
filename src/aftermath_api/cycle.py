@@ -215,6 +215,7 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", even
             "model_calls": model_calls,
             "sec_edgar": "configured" if settings.sec_user_agent.strip() else "disabled",
             "hf1": _hf1_detail(settings, now, hf1_scan),
+            **({"unbound_numbers": result["unbound_numbers"]} if result.get("unbound_numbers") else {}),
         },
     })
     return {

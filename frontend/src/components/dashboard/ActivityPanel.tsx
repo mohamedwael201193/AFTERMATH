@@ -8,6 +8,8 @@ import { TickerIcon } from "@/components/artwork/TickerIcon";
 import { instrumentCatalog } from "@/data/instrumentCatalog";
 import { formatEt, formatUsd } from "@/lib/format";
 import { useDashboardStore } from "@/lib/dashboardStore";
+import type { CycleStatus } from "@/components/dashboard/useDashboardData";
+import { shownCount } from "@/services/liveDataProvider";
 import { cn } from "@/lib/utils";
 
 /**
@@ -15,14 +17,15 @@ import { cn } from "@/lib/utils";
  * estimated costs. The honest book: what was simulated, what was blocked,
  * and why.
  */
-export function ActivityPanel({ activity }: { activity: ActivityRecord[] }) {
+export function ActivityPanel({ activity, cycle = null }: { activity: ActivityRecord[]; cycle?: CycleStatus | null }) {
   const selectEvent = useDashboardStore((s) => s.selectEvent);
 
-  const fills = activity.filter((a) => a.execution === "FILLED");
-  const preModel = activity.filter((a) => a.governorCalled === false);
-  const refusals = activity.filter(
-    (a) => a.governorCalled !== false && (a.execution === "REFUSED" || a.riskOutcome === "REFUSED")
-  );
+  const paperFills = cycle?.paperFills;
+  const preModelRefusals = cycle?.preModelRefusals;
+  const riskRefusals = cycle?.riskRefusals;
+  const scheduledCycles = cycle?.scheduledCycles;
+  const llmDecisions = cycle?.llmDecisions;
+  const hasFills = typeof paperFills === "number" && paperFills > 0;
   const combinedCosts = useMemo(
     () => [
       { label: "Exchange fees", usd: 0 },
@@ -30,6 +33,13 @@ export function ActivityPanel({ activity }: { activity: ActivityRecord[] }) {
     ],
     []
   );
+  const counterCells = [
+    { label: "Scheduled cycles", value: shownCount(scheduledCycles), tone: "text-ink" },
+    { label: "Pre-model refusals", value: shownCount(preModelRefusals), tone: "text-ink" },
+    { label: "LLM decisions", value: shownCount(llmDecisions), tone: "text-forest-deep" },
+    { label: "Risk refusals", value: shownCount(riskRefusals), tone: "text-risk" },
+    { label: "Paper fills", value: shownCount(paperFills), tone: "text-forest-deep" },
+  ];
 
   return (
     <div className="grid grid-cols-1 gap-6">
@@ -39,30 +49,21 @@ export function ActivityPanel({ activity }: { activity: ActivityRecord[] }) {
             The paper book — what actually happened
           </h3>
           <p className="mt-2 max-w-xl text-sm leading-relaxed text-ink-soft">
-            {fills.length} stored paper {fills.length === 1 ? "fill" : "fills"}, {refusals.length} risk{" "}
-            {refusals.length === 1 ? "refusal" : "refusals"}, and {preModel.length} pre-model{" "}
-            {preModel.length === 1 ? "cycle" : "cycles"}. A pre-model cycle is not a governor block. Zero fills are not a profit result. Costs stay
-            INSUFFICIENT_DATA until a graded fill is stored.
+            Scheduled cycles {shownCount(scheduledCycles)}. Pre-model refusals {shownCount(preModelRefusals)}. LLM decisions{" "}
+            {shownCount(llmDecisions)}. Risk refusals {shownCount(riskRefusals)}. Paper fills {shownCount(paperFills)}. A pre-model refusal is not a governor block.
+            {paperFills === 0 ? " Zero paper fills are not a profit result." : ""} Costs stay INSUFFICIENT_DATA until a graded fill is stored.
           </p>
-          <dl className="tnum mt-4 grid grid-cols-2 gap-3 text-center @min-[28rem]:grid-cols-4">
-            <div className="rounded-2xl border-2 border-line bg-paper px-3 py-3">
-              <dt className="text-[10px] font-bold uppercase text-ink-soft">Fills</dt>
-              <dd className="mt-1 font-display text-2xl text-forest-deep">{fills.length}</dd>
-            </div>
-            <div className="rounded-2xl border-2 border-line bg-paper px-3 py-3">
-              <dt className="text-[10px] font-bold uppercase text-ink-soft">Risk refusals</dt>
-              <dd className="mt-1 font-display text-2xl text-risk">
-                {refusals.length}
-              </dd>
-            </div>
-            <div className="rounded-2xl border-2 border-line bg-paper px-3 py-3">
-              <dt className="text-[10px] font-bold uppercase text-ink-soft">Pre-model</dt>
-              <dd className="mt-1 font-display text-2xl text-ink">{preModel.length}</dd>
-            </div>
+          <dl className="tnum mt-4 grid grid-cols-2 gap-3 text-center @min-[28rem]:grid-cols-3 @min-[60rem]:grid-cols-6">
+            {counterCells.map((cell) => (
+              <div key={cell.label} className="rounded-2xl border-2 border-line bg-paper px-3 py-3">
+                <dt className="text-[10px] font-bold uppercase text-ink-soft">{cell.label}</dt>
+                <dd className={cn("mt-1 font-display text-2xl", cell.tone)}>{cell.value}</dd>
+              </div>
+            ))}
             <div className="rounded-2xl border-2 border-forest bg-forest-mist px-3 py-3">
               <dt className="text-[10px] font-bold uppercase text-forest-deep">Costs</dt>
               <dd className="mt-1 font-display text-lg text-forest-deep">
-                {fills.length === 0 ? "INSUFFICIENT_DATA" : formatUsd(combinedCosts[0].usd + combinedCosts[1].usd)}
+                {hasFills ? formatUsd(combinedCosts[0].usd + combinedCosts[1].usd) : "INSUFFICIENT_DATA"}
               </dd>
             </div>
           </dl>
@@ -71,10 +72,10 @@ export function ActivityPanel({ activity }: { activity: ActivityRecord[] }) {
           <p className="text-xs font-bold uppercase tracking-wide text-ink-soft">
             Estimated cost structure (fills)
           </p>
-          {fills.length === 0 ? (
-            <p className="mt-6 text-sm font-semibold text-ink-soft">INSUFFICIENT_DATA — no graded fill is stored.</p>
-          ) : (
+          {hasFills ? (
             <CostBreakdownChart costs={combinedCosts} height={170} />
+          ) : (
+            <p className="mt-6 text-sm font-semibold text-ink-soft">INSUFFICIENT_DATA — no graded fill is stored.</p>
           )}
         </div>
       </section>

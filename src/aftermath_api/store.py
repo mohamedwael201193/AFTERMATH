@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import copy
+import json
+import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
 
 class Immutable(Exception):
@@ -206,6 +209,23 @@ class MemoryStore:
             "book_count": books,
             "precedent_count": precedents,
         }
+
+    def operation_status(self, *, now: datetime | None = None) -> dict:
+        moment = now or datetime.now(timezone.utc)
+        runs = [
+            row for row in self.runs.values()
+            if _started_in_lookback(row.get("started_at_utc"), moment)
+        ]
+        start, end = _window_bounds(runs, moment)
+        decisions = [
+            row for row in self.decisions.values()
+            if row.get("decision_source") == "model" and _fact_in_window(row.get("idempotency_key"), row.get("created_at_utc"), moment, start, end)
+        ]
+        fills = [
+            row for row in self.fills.values()
+            if row.get("status") in ("PAPER_FILLED", "CLOSED") and _fact_in_window(row.get("idempotency_key"), row.get("created_at_utc"), moment, start, end)
+        ]
+        return build_operation_status(runs, decisions, len(fills), moment)
 
     def run_for_key(self, key: str) -> dict | None:
         return self.runs.get(key)
@@ -603,6 +623,51 @@ class PostgresStore:
             "precedent_count": int(precedents),
         }
 
+    def operation_status(self, *, now: datetime | None = None) -> dict:
+        """Trailing-hour operation snapshot. One run scan plus one counts read."""
+        moment = now or datetime.now(timezone.utc)
+        with self._connect() as conn:
+            run_rows = conn.execute(
+                f"""SELECT idempotency_key, status, reason, started_at_utc, finished_at_utc, detail
+                    FROM {self.schema}.paper_runs
+                    WHERE started_at_utc >= now() - interval '{OPERATION_LOOKBACK_HOURS} hours'"""
+            ).fetchall()
+            counted = conn.execute(
+                f"""SELECT kind, status, reason, decision_source, idempotency_key, created_at_utc FROM (
+                        SELECT 'decision'::text AS kind, status, reason, decision_source, idempotency_key, created_at_utc
+                        FROM {self.schema}.decisions
+                        WHERE decision_source = 'model'
+                          AND created_at_utc >= now() - interval '{OPERATION_LOOKBACK_HOURS} hours'
+                        UNION ALL
+                        SELECT 'fill'::text, status, NULL::text, NULL::text, idempotency_key, created_at_utc
+                        FROM {self.schema}.paper_fills
+                        WHERE status IN ('PAPER_FILLED', 'CLOSED')
+                          AND created_at_utc >= now() - interval '{OPERATION_LOOKBACK_HOURS} hours'
+                    ) counted"""
+            ).fetchall()
+        runs = [
+            {
+                "idempotency_key": row[0],
+                "status": row[1],
+                "reason": row[2],
+                "started_at_utc": row[3],
+                "finished_at_utc": row[4],
+                "detail": row[5],
+            }
+            for row in run_rows
+        ]
+        start, end = _window_bounds(runs, moment)
+        decisions = []
+        fills = 0
+        for kind, status, reason, source, key, created in counted:
+            if not _fact_in_window(key, created, moment, start, end):
+                continue
+            if kind == "fill":
+                fills += 1
+            else:
+                decisions.append({"status": status, "reason": reason, "decision_source": source, "idempotency_key": key})
+        return build_operation_status(runs, decisions, fills, moment)
+
     def run_for_key(self, key: str) -> dict | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -708,4 +773,238 @@ def _run_row(row) -> dict:
         "started_at_utc": _iso(row[5]),
         "finished_at_utc": _iso(row[6]) if row[6] else None,
         "detail": row[7],
+    }
+
+
+OPERATION_HOURS = 48
+OPERATION_LOOKBACK_HOURS = 72
+_RUN_KEY_PREFIX = "paper-cycle:v2:"
+_HOUR_KEY = re.compile(r"^paper-cycle:v2:(\d{4}-\d{2}-\d{2}T\d{2})(?:$|:)")
+# Reasons written before the model is called. filing_document_missing is the cycle's document_not_ready.
+_PRE_MODEL_REASONS = frozenset({
+    "no_qualifying_event",
+    "scheduled_no_new_evidence",
+    "source_unavailable",
+    "missing_order_book",
+    "document_not_ready",
+    "filing_document_missing",
+})
+# Failed check names from governor.check. A refusal stores them joined by comma.
+_GOVERNOR_REFUSAL_CHECKS = frozenset({
+    "emergency_stop_off",
+    "symbol_matches_event",
+    "symbol_whitelisted",
+    "contract_tradeable",
+    "llm_confidence",
+    "data_fresh",
+    "event_fresh",
+    "daily_loss_ok",
+    "drawdown_ok",
+    "symbol_loss_ok",
+    "not_already_positioned",
+    "open_positions_ok",
+    "precedents_ok",
+    "hedge_fit_ok",
+    "spread_ok",
+    "gross_leverage_ok",
+    "depth_ok",
+    "horizon_ok",
+})
+# Model rows that abstain while waiting for the next book are holds, not refusals.
+_MODEL_HOLDS = frozenset({"awaiting_next_book"})
+_REFUSAL_STATUSES = frozenset({"ABSTAIN", "REJECTED", "RISK_REJECTED"})
+
+
+def _parse_ts(value) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _hour_floor(moment: datetime) -> datetime:
+    return moment.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+
+
+def _hour_token(moment: datetime) -> str:
+    return _hour_floor(moment).strftime("%Y-%m-%dT%H")
+
+
+def _hour_from_key(key) -> datetime | None:
+    if not isinstance(key, str):
+        return None
+    match = _HOUR_KEY.match(key)
+    if not match:
+        return None
+    return datetime.strptime(match.group(1), "%Y-%m-%dT%H").replace(tzinfo=timezone.utc)
+
+
+def _as_detail(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _as_number(value) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _started_in_lookback(value, moment: datetime) -> bool:
+    started = _parse_ts(value)
+    if started is None:
+        return False
+    return started >= moment - timedelta(hours=OPERATION_LOOKBACK_HOURS)
+
+
+def _runs_by_hour(runs: list[dict]) -> dict[datetime, dict]:
+    chosen: dict[datetime, dict] = {}
+    for run in runs:
+        hour = _hour_from_key(run.get("idempotency_key"))
+        if hour is None:
+            continue
+        previous = chosen.get(hour)
+        if previous is None or (_duration_seconds(previous) is None and _duration_seconds(run) is not None):
+            chosen[hour] = run
+    return chosen
+
+
+def _window_bounds(runs: list[dict], moment: datetime) -> tuple[datetime, datetime]:
+    current = _hour_floor(moment)
+    by_hour = _runs_by_hour(runs)
+    end = current if current in by_hour else current - timedelta(hours=1)
+    start = end - timedelta(hours=OPERATION_HOURS - 1)
+    return start, end
+
+
+def _fact_in_window(key, created_at, moment: datetime, start: datetime, end: datetime) -> bool:
+    created = _parse_ts(created_at)
+    if created is None or created < moment - timedelta(hours=OPERATION_LOOKBACK_HOURS):
+        return False
+    hour = _hour_from_key(key)
+    if hour is not None:
+        return start <= hour <= end
+    created_hour = _hour_floor(created)
+    return start <= created_hour <= end
+
+
+def _duration_seconds(run: dict) -> float | None:
+    started = _parse_ts(run.get("started_at_utc"))
+    finished = _parse_ts(run.get("finished_at_utc"))
+    if started is None or finished is None:
+        return None
+    return round((finished - started).total_seconds(), 3)
+
+
+def _model_calls(run: dict) -> float | None:
+    return _as_number(_as_detail(run.get("detail")).get("model_calls"))
+
+
+def _is_pre_model_refusal(run: dict) -> bool:
+    reason = run.get("reason")
+    if isinstance(reason, str) and reason in _PRE_MODEL_REASONS:
+        return True
+    return _model_calls(run) == 0 and run.get("status") == "refused"
+
+
+def _is_governor_refusal(reason) -> bool:
+    if not isinstance(reason, str) or not reason.strip():
+        return False
+    parts = [part.strip() for part in reason.split(",") if part.strip()]
+    if not parts:
+        return False
+    if parts == ["refused"]:
+        return True
+    return all(part in _GOVERNOR_REFUSAL_CHECKS for part in parts)
+
+
+def _classify_model_decision(row: dict) -> str | None:
+    if row.get("decision_source") != "model":
+        return None
+    status = str(row.get("status") or "").upper()
+    if status not in _REFUSAL_STATUSES:
+        return None
+    reason = row.get("reason") or ""
+    if reason in _MODEL_HOLDS:
+        return None
+    if _is_governor_refusal(reason):
+        return "risk"
+    return "other"
+
+
+def _consecutive_hours(by_hour: dict[datetime, dict], end: datetime, start: datetime) -> int:
+    streak = 0
+    cursor = end
+    while cursor >= start and cursor in by_hour:
+        streak += 1
+        cursor -= timedelta(hours=1)
+    return streak
+
+
+def build_operation_status(runs: list[dict], decisions: list[dict], paper_fills: int, moment: datetime) -> dict:
+    """Hour gaps come from the idempotency key, so a late retry stays on its scheduled hour."""
+    by_hour = _runs_by_hour(runs)
+    current = _hour_floor(moment)
+    end = current if current in by_hour else current - timedelta(hours=1)
+    start = end - timedelta(hours=OPERATION_HOURS - 1)
+    hours = [start + timedelta(hours=offset) for offset in range(OPERATION_HOURS)]
+    first_seen = min(by_hour) if by_hour else None
+    tracked = [hour for hour in hours if first_seen is not None and hour >= first_seen]
+    recorded = [hour for hour in tracked if hour in by_hour]
+    missing = [hour for hour in tracked if hour not in by_hour]
+    streak = _consecutive_hours(by_hour, end, start)
+    last_completed = current - timedelta(hours=1)
+    observed_start = last_completed - timedelta(hours=OPERATION_HOURS - 1)
+    observed_streak = _consecutive_hours(by_hour, last_completed, observed_start)
+    latest = by_hour[recorded[-1]] if recorded else None
+    risk = 0
+    other = 0
+    for row in decisions:
+        kind = _classify_model_decision(row)
+        if kind == "risk":
+            risk += 1
+        elif kind == "other":
+            other += 1
+    in_window = [by_hour[hour] for hour in recorded]
+    return {
+        "window_hours": OPERATION_HOURS,
+        "expected_hours": len(tracked),
+        "before_first_run_hours": OPERATION_HOURS - len(tracked),
+        "recorded_hours": len(recorded),
+        "missing_hours": [_hour_token(hour) for hour in reversed(missing)][:OPERATION_HOURS],
+        "first_recorded_hour": _hour_token(recorded[0]) if recorded else None,
+        "last_recorded_hour": _hour_token(recorded[-1]) if recorded else None,
+        "consecutive_recorded_hours_ending_now": streak,
+        "gap_free_since": _hour_token(end - timedelta(hours=streak - 1)) if streak else None,
+        "latest_duration_seconds": _duration_seconds(latest) if latest else None,
+        "continuous_operation_observed": observed_streak >= 24,
+        "counters": {
+            "scheduled_cycles": len(recorded),
+            "pre_model_refusals": sum(1 for run in in_window if _is_pre_model_refusal(run)),
+            "llm_decisions": sum(1 for run in in_window if (_model_calls(run) or 0) > 0),
+            "risk_refusals": risk,
+            "other": other,
+            "paper_fills": int(paper_fills),
+            "fetch_error_runs": sum(
+                1 for run in in_window
+                if (_as_number(_as_detail(run.get("detail")).get("fetch_errors")) or 0) > 0
+            ),
+        },
     }

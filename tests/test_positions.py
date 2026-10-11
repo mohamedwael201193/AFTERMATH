@@ -50,6 +50,24 @@ def test_same_snapshot_does_not_open_a_position():
     assert opened["error"] == "no_later_book"
 
 
+def test_entry_and_exit_use_the_approved_contract_fee_not_a_default():
+    proposed = "2026-10-10T12:00:00+00:00"
+    opened_at = "2026-10-10T13:00:00+00:00"
+    entry_book = _book(opened_at, "entry-book", 99.99, 100.01, [[99.99, 10]], [[100.0, 10]])
+    pending = {**_pending(proposed, "proposal-book"), "fee_rate": 0.0004}
+    opened = enter_later(pending, [entry_book])
+    assert opened["status"] == "PAPER_FILLED"
+    assert opened["cost_json"]["fee_rate"] == 0.0004
+    entry = opened["cost_json"]["entry"]
+    assert abs(entry["fee_usdt"] - entry["filled_usdt"] * 0.0004) < 1e-9
+    missing = {key: value for key, value in _pending(proposed, "proposal-book").items() if key != "fee_rate"}
+    assert enter_later(missing, [entry_book]) == {"error": "missing_fee"}
+    exit_at = (datetime.fromisoformat(opened_at) + timedelta(hours=24, seconds=1)).isoformat()
+    exit_book = _book(exit_at, "exit-book", 100.99, 101.01, [[100.99, 10]], [[101.0, 10]])
+    unpriced = {key: value for key, value in opened["cost_json"].items() if key != "fee_rate"}
+    assert close_later(unpriced, [exit_book], datetime.fromisoformat(exit_at)) == {"error": "missing_fee"}
+
+
 def test_later_book_entry_and_exit_match_the_cost_model():
     proposed = "2026-10-10T12:00:00+00:00"
     opened_at = "2026-10-10T13:00:00+00:00"

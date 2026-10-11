@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -52,8 +53,17 @@ def abstain(reason: str, rows: list[tuple[str, str]], prompt_hash: str | None = 
     }
 
 
+MODEL_TIMEOUT_S = 90
+
+
 def call_model(settings: Settings, evidence_rows: list[dict], transport=None, prompt: str | None = None) -> str:
-    facts = [{"id": r["id"], "payload_hash": r["payload_hash"], "facts": r.get("facts", {})} for r in evidence_rows]
+    facts = []
+    for r in evidence_rows:
+        row = {"id": r["id"], "payload_hash": r["payload_hash"], "facts": r.get("facts", {})}
+        instrument = (r.get("event") or {}).get("instrument_id")
+        if isinstance(instrument, str) and instrument:
+            row["instrument_id"] = instrument
+        facts.append(row)
     body = {
         "model": settings.llm_model,
         "messages": [
@@ -68,7 +78,7 @@ def call_model(settings: Settings, evidence_rows: list[dict], transport=None, pr
             settings.llm_base_url.rstrip("/") + "/chat/completions",
             json=body,
             headers={"Authorization": f"Bearer {settings.llm_api_key}"},
-            timeout=30,
+            timeout=MODEL_TIMEOUT_S,
         )
         status = getattr(response, "status_code", 200)
         if status == 401 and _attempt == 0:
@@ -170,11 +180,14 @@ def decide_bounded(
             for key, value in raw.items():
                 if isinstance(value, (int, float)) and not isinstance(value, bool):
                     facts.append(Fact(str(key), float(value), "unknown"))
+    facts.extend(SERVER_FIXED_FACTS)
     spoken = parsed.get("text") or ""
     if spoken:
-        verdict, _details = check_text(spoken, facts, allow_words=False)
+        verdict, details = check_text(_mask_names(spoken), facts, allow_words=False)
         if verdict != "OK":
-            return refuse("unverifiable_number", called=True)
+            refused = refuse("unverifiable_number", called=True)
+            refused["unbound_numbers"] = [str(token)[:32] for token in (details or {}).get("tokens", [])][:10]
+            return refused
     out = abstain("model_no_action", rows, PROMPT_V3_HASH)
     out["model_called"] = True
     out["decision_source"] = "model"
@@ -186,6 +199,18 @@ def decide_bounded(
         out["status"] = "ABSTAIN"
         out["reason"] = "awaiting_next_book"
     return out
+
+
+SERVER_FIXED_FACTS = (
+    Fact("server.size_frac", 0.05, "unknown"),
+    Fact("server.horizon_hours", 24.0, "unknown"),
+)
+INDEX_NAMES = re.compile(r"\bNasdaq[- ]100\b", re.IGNORECASE)
+
+
+def _mask_names(text: str) -> str:
+    """The prompt names its reference index. A digit inside that name is not a claim."""
+    return INDEX_NAMES.sub("Nasdaq reference", text)
 
 
 def _proposal_error(proposal: dict | None, symbol: str, evidence_ids: list[str]) -> str | None:

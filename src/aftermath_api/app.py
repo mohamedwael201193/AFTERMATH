@@ -257,11 +257,15 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
         counts = store.dashboard_counts()
         run = counts["latest_run"]
         sec = "configured" if settings.sec_user_agent else "disabled"
+        clock = getattr(request.app.state, "ops_clock", None)
+        moment = clock() if callable(clock) else None
+        operation = store.operation_status(now=moment)
         return {
             "latest_run": run,
             "scheduler": "external_hourly_post",
             "schedule": "github_actions_hourly",
             "continuous_operation": False,
+            "continuous_operation_observed": operation["continuous_operation_observed"],
             "stale": _run_is_stale(run),
             "fill_count": counts["fill_count"],
             "decision_count": counts["decision_count"],
@@ -271,6 +275,7 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
             "paper_only": True,
             "kill_switch": os.environ.get("AFTERMATH_KILL") == "1",
             "sources": {"sec_edgar": {"status": sec, "reason": None if settings.sec_user_agent else "sec_user_agent_missing"}},
+            "operation": operation,
         }
 
     @app.get("/v1/metrics")

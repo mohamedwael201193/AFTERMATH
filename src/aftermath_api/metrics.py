@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 import statistics
 
@@ -118,3 +119,133 @@ def _complete(row: dict) -> bool:
 
 def _num(row: dict, key: str) -> float:
     return float(row[key])
+
+
+# Additive helpers for H-BR-1. They do not change evaluate().
+# Euler-Mascheroni constant used by Bailey & Lopez de Prado (2014), equation for E[max SR].
+_EULER = 0.57721566490153286060651209008240243
+
+
+def per_trade_sharpe(values: list[float]) -> float | None:
+    """Mean / sample standard deviation, rounded to 4 decimals. Not annualized."""
+    raw = sharpe_ratio(values)
+    if raw is None:
+        return None
+    return round(raw, 4)
+
+
+def sharpe_ratio(values: list[float]) -> float | None:
+    """Unrounded per-trade Sharpe. None when n < 2 or the sample deviation is 0."""
+    if len(values) < 2:
+        return None
+    deviation = statistics.stdev(values)
+    if deviation == 0:
+        return None
+    return statistics.fmean(values) / deviation
+
+
+def max_drawdown(cumulative: list[float]) -> float:
+    """Peak-to-trough decline of an already-cumulative series.
+
+    The series is not differenced. An empty series, or a series that never
+    falls below its running peak, has drawdown 0. Callers who want the
+    drawdown of a trade list from a flat start should prepend 0.
+    """
+    if not cumulative:
+        return 0.0
+    peak = cumulative[0]
+    worst = 0.0
+    for value in cumulative:
+        if value > peak:
+            peak = value
+        drop = peak - value
+        if drop > worst:
+            worst = drop
+    return round(worst, 4)
+
+
+def exposure_fraction(hours_in_position: float, hours_available: float) -> float:
+    """Fraction of available hours that are in a position."""
+    if hours_available <= 0:
+        raise ValueError("hours_available must be positive")
+    return hours_in_position / hours_available
+
+
+def turnover_rate(notional_traded: float, hours_available: float) -> float:
+    """Notional traded per available hour. The caller defines one round trip's notional."""
+    if hours_available <= 0:
+        raise ValueError("hours_available must be positive")
+    return notional_traded / hours_available
+
+
+def bonferroni(p: float, k: int) -> float:
+    """Family-wise adjustment min(1, p * k). k is the number of variants, not a p-value."""
+    if k < 1:
+        raise ValueError("k must be >= 1")
+    if p < 0:
+        raise ValueError("p must be >= 0")
+    return min(1.0, float(p) * int(k))
+
+
+def moment_skew_kurtosis(values: list[float]) -> tuple[float, float] | None:
+    """Pearson skew and kurtosis with divisor n. A normal distribution has kurtosis 3.
+
+    Returns None when n < 2 or the second moment is 0.
+    """
+    n = len(values)
+    if n < 2:
+        return None
+    mean = statistics.fmean(values)
+    m2 = sum((value - mean) ** 2 for value in values) / n
+    if m2 == 0:
+        return None
+    m3 = sum((value - mean) ** 3 for value in values) / n
+    m4 = sum((value - mean) ** 4 for value in values) / n
+    skew = m3 / (m2 ** 1.5)
+    kurtosis = m4 / (m2 ** 2)
+    return skew, kurtosis
+
+
+def deflated_sharpe(sharpe: float, n: int, n_trials: int, skew: float, kurtosis: float) -> float | None:
+    """Bailey & Lopez de Prado (2014) deflated Sharpe ratio, as a probability.
+
+    Kurtosis is the Pearson fourth moment (normal = 3). For a single trial,
+    the selection benchmark SR* is 0. For N > 1, the cross-trial variance is
+    the null sampling variance 1/(n-1): this helper has no separate variance
+    argument, and that is the variance of the Sharpe estimator when the true
+    Sharpe is 0. Returns None when n < 2 or the non-normality term is not positive.
+    """
+    if n < 2 or n_trials < 1:
+        return None
+    if n_trials == 1:
+        sr_star = 0.0
+    else:
+        scale = (1.0 / (n - 1)) ** 0.5
+        normal = statistics.NormalDist()
+        z1 = normal.inv_cdf(1.0 - 1.0 / n_trials)
+        z2 = normal.inv_cdf(1.0 - 1.0 / (n_trials * math.e))
+        sr_star = scale * ((1.0 - _EULER) * z1 + _EULER * z2)
+    inside = 1.0 - skew * sharpe + ((kurtosis - 1.0) / 4.0) * sharpe * sharpe
+    if inside <= 0.0:
+        return None
+    z = ((sharpe - sr_star) * math.sqrt(n - 1)) / math.sqrt(inside)
+    return statistics.NormalDist().cdf(z)
+
+
+def one_sided_bootstrap_p(values: list[float], *, draws: int = BOOTSTRAP_DRAWS, seed: int = BOOTSTRAP_SEED) -> float:
+    """Conservative one-sided bootstrap p for the alternative that the mean is > 0.
+
+    p = (1 + count of resampled means that are <= 0) / (draws + 1).
+    """
+    if draws < 1:
+        raise ValueError("draws must be >= 1")
+    if not values:
+        return 1.0
+    rng = random.Random(seed)
+    width = len(values)
+    nonpositive = 0
+    for _draw in range(draws):
+        sample_mean = statistics.fmean(values[rng.randrange(width)] for _item in range(width))
+        if sample_mean <= 0:
+            nonpositive += 1
+    return (1 + nonpositive) / (draws + 1)

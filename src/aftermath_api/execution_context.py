@@ -105,9 +105,15 @@ def _filing_time(events: list[dict], symbol: str) -> datetime | None:
 def _apply_market(context: dict, market: dict | None) -> dict:
     if market is None:
         return {"context": context}
+    contract = market.get("contract") if isinstance(market.get("contract"), dict) else None
+    category = _category(market, contract)
+    if category is not None and category != "USDT-FUTURES":
+        return {"error": "incomplete_market:category"}
+    if market.get("symbol") not in (None, context["symbol"]):
+        return {"error": "incomplete_market:symbol"}
     missing = []
-    contract = market.get("contract")
-    if not isinstance(contract, dict) or contract.get("status") != "normal" or contract.get("is_rwa") not in ("YES", "NO"):
+    raw_status = contract.get("status") if contract else None
+    if contract is None or raw_status not in ("normal", "online") or contract.get("is_rwa") not in ("YES", "NO"):
         missing.append("contract")
     precedents = market.get("n_precedents")
     if not isinstance(precedents, int) or isinstance(precedents, bool) or precedents < 0:
@@ -120,16 +126,16 @@ def _apply_market(context: dict, market: dict | None) -> dict:
         missing.append("hedge_beta")
     if missing:
         return {"error": "incomplete_market:" + ",".join(missing)}
-    fee_rate = None
     raw_fee = contract.get("taker_fee_rate")
-    if raw_fee is not None:
-        try:
-            fee_rate = float(raw_fee)
-        except (TypeError, ValueError):
-            return {"error": "incomplete_market:fee"}
-        if not math.isfinite(fee_rate) or fee_rate < 0 or fee_rate > 0.01:
-            return {"error": "incomplete_market:fee"}
-    context["contract"] = {"status": contract["status"], "is_rwa": contract["is_rwa"]}
+    if isinstance(raw_fee, bool) or raw_fee is None:
+        return {"error": "incomplete_market:fee"}
+    try:
+        fee_rate = float(raw_fee)
+    except (TypeError, ValueError):
+        return {"error": "incomplete_market:fee"}
+    if not math.isfinite(fee_rate) or fee_rate < 0 or fee_rate > 0.01:
+        return {"error": "incomplete_market:fee"}
+    context["contract"] = {"status": "normal", "is_rwa": contract["is_rwa"]}
     context["n_precedents"] = precedents
     context["hedge_r2"] = float(hedge_r2)
     context["hedge_beta"] = float(hedge_beta)
@@ -149,7 +155,102 @@ def _apply_market(context: dict, market: dict | None) -> dict:
         context["n_open"] = market["n_open"]
     if isinstance(market.get("open_symbols"), list):
         context["open_symbols"] = [str(item) for item in market["open_symbols"]]
+    copied = _copy_instrument(context, market, contract, category, raw_status)
+    if copied:
+        return {"error": copied}
     return {"context": context, "fee_rate": fee_rate}
+
+
+def _category(market: dict, contract: dict | None) -> str | None:
+    for source in (market, contract or {}):
+        value = source.get("instrument_category")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _copy_instrument(context: dict, market: dict, contract: dict, category: str | None, raw_status: str) -> str | None:
+    if category is not None:
+        context["instrument_category"] = category
+    source = _present(market, contract, "metadata_source")
+    if source is not None:
+        if not isinstance(source, str) or not source.startswith("https://") or "?" in source:
+            return "incomplete_market:metadata_source"
+        context["metadata_source"] = source
+    specs = (
+        ("funding_interval_hours", 1),
+        ("price_precision", 0),
+        ("quantity_precision", 0),
+    )
+    for key, minimum in specs:
+        if key not in market and key not in contract:
+            continue
+        value = market[key] if key in market else contract.get(key)
+        parsed = _whole(value, minimum)
+        if parsed is None:
+            return "incomplete_market:" + key
+        context[key] = parsed
+    if "min_order_qty" in market or "min_order_qty" in contract:
+        raw_qty = market["min_order_qty"] if "min_order_qty" in market else contract.get("min_order_qty")
+        qty = _positive(raw_qty)
+        if qty is None:
+            return "incomplete_market:min_order_qty"
+        context["min_order_qty"] = qty
+    venue = _present(market, contract, "venue_status")
+    if isinstance(venue, str) and venue.strip():
+        context["venue_status"] = venue.strip()
+    elif raw_status == "online":
+        context["venue_status"] = "online"
+    sources = _present(market, contract, "field_sources")
+    if isinstance(sources, dict):
+        context["field_sources"] = sources
+    quote = _present(market, contract, "quote_coin")
+    if quote is not None:
+        if quote != "USDT":
+            return "incomplete_market:quote"
+        context["quote_coin"] = "USDT"
+    return None
+
+
+def _present(market: dict, contract: dict, key: str):
+    if key in market and market[key] is not None:
+        return market[key]
+    if key in contract and contract[key] is not None:
+        return contract[key]
+    return None
+
+
+def _whole(value, minimum: int) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        number = int(value)
+    elif isinstance(value, str):
+        try:
+            number = int(value, 10)
+        except ValueError:
+            return None
+    else:
+        return None
+    if number < minimum:
+        return None
+    return number
+
+
+def _positive(value) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number <= 0:
+        return None
+    return number
 
 
 def _fee(payload: dict) -> float | None:

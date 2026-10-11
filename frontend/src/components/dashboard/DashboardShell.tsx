@@ -23,6 +23,7 @@ import { DecisionDetail } from "@/components/dashboard/DecisionDetail";
 import { useDashboardData, useEventBundle } from "@/components/dashboard/useDashboardData";
 import { useDashboardStore, type DashboardTab } from "@/lib/dashboardStore";
 import { useBelowXl } from "@/hooks/use-below-xl";
+import { relativeToNow } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const NAV: Array<{ id: DashboardTab; label: string; icon: React.ElementType; hint: string }> = [
@@ -32,12 +33,21 @@ const NAV: Array<{ id: DashboardTab; label: string; icon: React.ElementType; hin
   { id: "activity", label: "Activity", icon: ReceiptText, hint: "Paper ledger" },
 ];
 
+function gapFreeSinceLabel(hour: string | null | undefined): string {
+  if (!hour) return "n/a";
+  const iso = /^\d{4}-\d{2}-\d{2}T\d{2}$/.test(hour) ? `${hour}:00:00.000Z` : hour;
+  if (!Number.isFinite(Date.parse(iso))) return "n/a";
+  return relativeToNow(iso);
+}
+
 function MarketStatusChips({ cycle }: { cycle: ReturnType<typeof useDashboardData>["cycle"] }) {
   const scheduler = cycle?.scheduler ?? "unknown";
   const schedule = cycle?.schedule ?? null;
   const sec = cycle?.secEdgarStatus ?? "unknown";
   const modelCalls = cycle?.modelCallsLatest;
   const kill = cycle?.killSwitch === true;
+  const missed = cycle?.missedHours;
+  const newestMissed = cycle?.newestMissingHour;
 
   return (
     <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
@@ -66,6 +76,15 @@ function MarketStatusChips({ cycle }: { cycle: ReturnType<typeof useDashboardDat
       </span>
       <span className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft">
         Precedents · {cycle?.precedentCount ?? "n/a"}
+      </span>
+      <span
+        className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft"
+        title={newestMissed ? `Newest missed hour ${newestMissed} UTC` : missed === 0 ? "No missed hour in the trailing 48h" : undefined}
+      >
+        Missed hours (48h) · {missed == null ? "n/a" : missed}
+      </span>
+      <span className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft">
+        Gap-free since · {gapFreeSinceLabel(cycle?.gapFreeSince)}
       </span>
       <span className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft">
         Last cycle model calls · {modelCalls == null ? "n/a" : modelCalls}
@@ -364,7 +383,7 @@ export function DashboardShell({ onExit }: { onExit: () => void }) {
                         costs.
                       </p>
                     </div>
-                    <ActivityPanel activity={activity} />
+                    <ActivityPanel activity={activity} cycle={cycle} />
                   </div>
                 )}
               </>

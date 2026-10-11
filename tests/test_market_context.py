@@ -79,10 +79,27 @@ def test_contract_candles_and_funding_reject_bad_payloads():
     with pytest.raises(ApiError):
         contract_from_record({"data": [{"symbol": "NVDAUSDT", "symbolStatus": "normal", "isRwa": "YES"}]}, "NVDAUSDT")
     parsed = contract_from_record(
-        {"data": [{"symbol": "NVDAUSDT", "symbolStatus": "normal", "isRwa": "YES", "takerFeeRate": "0.0006"}], "sha256": "abc"},
+        {
+            "endpoint": "/api/v2/mix/market/contracts",
+            "params": {"productType": "USDT-FUTURES", "symbol": "NVDAUSDT"},
+            "data": [{
+                "symbol": "NVDAUSDT",
+                "symbolStatus": "normal",
+                "symbolType": "perpetual",
+                "quoteCoin": "USDT",
+                "isRwa": "YES",
+                "takerFeeRate": "0.0006",
+                "fundInterval": "8",
+                "minTradeNum": "0.01",
+                "pricePlace": "2",
+                "volumePlace": "2",
+            }],
+            "sha256": "abc",
+        },
         "NVDAUSDT",
     )
     assert parsed["is_rwa"] == "YES"
+    assert parsed["instrument_category"] == "USDT-FUTURES"
     end = 3_600_000 * 3
     rows = closed_candles({"data": [[0, 1, 1, 1, 10, 1, 1], [end, 1, 1, 1, 11, 1, 1]]}, end)
     assert rows == [[0, 10.0]]

@@ -3,7 +3,19 @@ import random
 import statistics
 from pathlib import Path
 
-from aftermath_api.metrics import BOOTSTRAP_DRAWS, BOOTSTRAP_SEED, evaluate
+from aftermath_api.metrics import (
+    BOOTSTRAP_DRAWS,
+    BOOTSTRAP_SEED,
+    bonferroni,
+    deflated_sharpe,
+    evaluate,
+    exposure_fraction,
+    max_drawdown,
+    moment_skew_kurtosis,
+    one_sided_bootstrap_p,
+    per_trade_sharpe,
+    turnover_rate,
+)
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -149,3 +161,55 @@ def test_golden_fixture_matches_hand_formulas():
     low, high = _bootstrap_bounds(differences)
     assert report["paired_agent_minus_fixed_bp"]["bootstrap_95"]["low"] == low
     assert report["paired_agent_minus_fixed_bp"]["bootstrap_95"]["high"] == high
+
+
+def test_additive_drawdown_exposure_turnover_and_bonferroni():
+    # Cumulative series [0, 10, 7, 12, 4].
+    # Peaks: 0, 10, 10, 12, 12. Drops: 0, 0, 3, 0, 8. Max drawdown is 8.
+    assert max_drawdown([0, 10, 7, 12, 4]) == 8
+    assert max_drawdown([1, 2, 3]) == 0
+    assert max_drawdown([]) == 0
+    # 8 position-hours out of 200 available hours is 0.04.
+    assert exposure_fraction(8, 200) == 0.04
+    # 4 units of notional over 200 hours is 0.02 per hour.
+    assert turnover_rate(4, 200) == 0.02
+    # 0.02 * 4 variants = 0.08. 0.4 * 4 caps at 1.
+    assert bonferroni(0.02, 4) == 0.08
+    assert bonferroni(0.4, 4) == 1.0
+
+
+def test_moments_and_the_house_per_trade_sharpe():
+    # values 1, 2, 3. mean 2. Second moment 2/3. Fourth moment 2/3.
+    # kurtosis = (2/3) / (2/3)^2 = 1.5. Skew is 0.
+    assert moment_skew_kurtosis([1, 2, 3]) == (0.0, 1.5)
+    values = [10.0] * 10 + [-5.0] * 10 + [0.0] * 10
+    # mean 50/30. Sample stdev gives Sharpe 0.2628 at 4 decimal places.
+    assert per_trade_sharpe(values) == 0.2628
+
+
+def test_deflated_sharpe_on_a_known_input():
+    # One trial and a zero Sharpe: SR* = 0, z = 0, Phi(0) = 0.5.
+    assert deflated_sharpe(0.0, 100, 1, 0.0, 3.0) == 0.5
+    # N=4, n=30, SR=0.5, skew=0, kurtosis=3 (Pearson, normal = 3).
+    # V = 1/29. scale = sqrt(1/29) = 0.18569533817705186.
+    # Phi^{-1}(0.75) = 0.6744897501960817.
+    # Phi^{-1}(1 - 1/(4e)) = Phi^{-1}(0.908031535) = 1.3287219496247633.
+    # Euler gamma = 0.5772156649015329.
+    # SR* = 0.18569533817705186 * ((1-gamma)*z1 + gamma*z2) = 0.195374303641627.
+    # Denominator sqrt(1 + ((3-1)/4)*0.5^2) = sqrt(1.125).
+    # z = (0.5 - 0.195374303641627) * sqrt(29) / sqrt(1.125) = 1.5466401237874416.
+    # Phi(z) = 0.9390249756 at 10 decimal places.
+    assert round(deflated_sharpe(0.5, 30, 4, 0.0, 3.0), 10) == 0.9390249756
+    # Same n and N, so the same SR*. skew=-1, kurtosis=6, SR=0.4.
+    # inside = 1 - (-1)*0.4 + ((6-1)/4)*0.16 = 1.6.
+    # Phi(z) = 0.8081672869 at 10 decimal places.
+    assert round(deflated_sharpe(0.4, 30, 4, -1.0, 6.0), 10) == 0.8081672869
+
+
+def test_one_sided_bootstrap_p_is_conservative():
+    # Every resample of a strictly positive sample has a positive mean.
+    # p = 1 / 2001.
+    assert one_sided_bootstrap_p([1.0, 2.0, 3.0]) == 1 / (BOOTSTRAP_DRAWS + 1)
+    assert one_sided_bootstrap_p([-2.0, -1.0]) == 1.0
+    assert BOOTSTRAP_SEED == 20261011
+    assert BOOTSTRAP_DRAWS == 2000

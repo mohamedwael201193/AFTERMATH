@@ -9,6 +9,7 @@ import { TickerIcon } from "@/components/artwork/TickerIcon";
 import { instrumentCatalog } from "@/data/instrumentCatalog";
 import { formatEt, relativeToNow } from "@/lib/format";
 import type { CycleStatus } from "@/components/dashboard/useDashboardData";
+import { shownCount } from "@/services/liveDataProvider";
 import { useDashboardStore } from "@/lib/dashboardStore";
 import { cn } from "@/lib/utils";
 
@@ -53,13 +54,14 @@ export function OverviewPanel({
 }) {
   const selectEvent = useDashboardStore((s) => s.selectEvent);
 
-  const fills = activity.filter((a) => a.execution === "FILLED");
-  const preModelCycles = activity.filter((a) => a.governorCalled === false);
-  const riskRefusals = activity.filter(
-    (a) => a.governorCalled !== false && (a.execution === "REFUSED" || a.riskOutcome === "REFUSED")
-  );
-
   const recentActivity = activity.slice(0, 5);
+  const counters: Array<{ label: string; value: number | null | undefined; note?: string }> = [
+    { label: "Scheduled cycles", value: cycle?.scheduledCycles },
+    { label: "Pre-model refusals", value: cycle?.preModelRefusals, note: "not a governor block" },
+    { label: "LLM decisions", value: cycle?.llmDecisions },
+    { label: "Risk refusals", value: cycle?.riskRefusals },
+    { label: "Paper fills", value: cycle?.paperFills },
+  ];
 
   return (
     <div className="grid grid-cols-1 gap-6">
@@ -93,31 +95,42 @@ export function OverviewPanel({
         <SummaryCard
           icon={Activity}
           label="Paper fills"
-          value={String(cycle?.fillCount ?? fills.length)}
-          hint={cycle?.evaluationStatus || (fills.length ? "fills recorded on the ledger" : "INSUFFICIENT_DATA")}
+          value={shownCount(cycle?.paperFills)}
+          hint={cycle?.evaluationStatus || "PAPER_FILLED or CLOSED in the trailing window"}
           detail={
             <p className="text-[11px] font-semibold text-ink-soft">
-              {fills.map((f) => f.instrumentSymbol).join(" · ")} — estimates, not profits
+              Estimates, not profits. Latest reason: {cycle?.reason || "none"}.
             </p>
           }
         />
         <SummaryCard
           icon={ShieldCheck}
-          label="Risk refusals · pre-model"
-          value={`${riskRefusals.length} · ${preModelCycles.length}`}
-          hint={
-            cycle?.stale
-              ? "last cycle is older than 2 hours"
-              : `${preModelCycles.length} pre-model ${preModelCycles.length === 1 ? "cycle" : "cycles"} (not governor blocks)`
-          }
+          label="Risk refusals"
+          value={shownCount(cycle?.riskRefusals)}
+          hint={cycle?.stale ? "last cycle is older than 2 hours" : "governor blocks after a model decision"}
           detail={
             <p className="text-[11px] font-semibold text-ink-soft">
-              Risk refusals: {riskRefusals.length}. Pre-model cycles: {preModelCycles.length}. Latest reason:{" "}
-              {cycle?.reason || "none"}.
+              Pre-model refusals: {shownCount(cycle?.preModelRefusals)}. A pre-model refusal is not a governor block.
             </p>
           }
         />
       </div>
+
+      <section className="rounded-3xl border-2 border-ink bg-paper px-5 py-4" aria-label="Trailing window counters">
+        <h3 className="text-sm font-bold uppercase tracking-wide text-ink">Trailing 48 hours</h3>
+        <p className="mt-1 text-sm text-ink-soft">
+          Scheduled cycles, pre-model refusals, and LLM decisions are separate. A pre-model refusal is not a governor block.
+        </p>
+        <dl className="mt-4 grid grid-cols-2 gap-3 @min-[46rem]:grid-cols-5">
+          {counters.map((item) => (
+            <div key={item.label} className="rounded-2xl border-2 border-line bg-warmwhite px-3 py-3">
+              <dt className="text-[10px] font-bold uppercase tracking-wide text-ink-soft">{item.label}</dt>
+              <dd className="tnum mt-1 font-display text-2xl text-forest-deep">{shownCount(item.value)}</dd>
+              {item.note ? <p className="mt-1 text-[10px] font-semibold text-ink-soft">{item.note}</p> : null}
+            </div>
+          ))}
+        </dl>
+      </section>
 
       <section className="rounded-3xl border-2 border-ink bg-paper px-5 py-4">
         <h3 className="text-sm font-bold uppercase tracking-wide text-ink">Price history</h3>

@@ -150,6 +150,86 @@ def test_model_body_excludes_server_secrets_and_retries_401():
     assert "production_ed25519.key" not in blob
 
 
+def test_model_sees_the_instrument_it_must_echo():
+    from aftermath_api.config import Settings
+    from aftermath_api.decide import call_model
+
+    settings = Settings(
+        env="test", database_url="", direct_url="", llm_api_key="k",
+        llm_base_url="https://example.test/v1", llm_model="m", llm_configured=True, reader_token="",
+        decision_token="", job_token="", signing_key_path="", sec_user_agent="",
+        web_origin="", decisions="model",
+    )
+    seen = []
+
+    class Ok:
+        status_code = 200
+
+        def json(self):
+            return {"choices": [{"message": {"content": "{}"}}]}
+
+    def transport(_url, json=None, headers=None, timeout=None):
+        seen.append(json)
+        return Ok()
+
+    rows = [
+        {"id": "ev_1", "payload_hash": "a", "facts": {"form": "8-K"}, "event": {"instrument_id": "TSLAUSDT"}},
+        {"id": "ev_2", "payload_hash": "b", "facts": {"last": 1.0}},
+    ]
+    call_model(settings, rows, transport)
+    evidence = json.loads(seen[0]["messages"][1]["content"])["evidence"]
+    assert evidence[0]["instrument_id"] == "TSLAUSDT"
+    assert "instrument_id" not in evidence[1]
+
+
+def _bounded(text: str) -> dict:
+    from datetime import datetime, timezone
+
+    from aftermath_api.config import Settings
+    from aftermath_api.decide import decide_bounded
+
+    settings = Settings(
+        env="test", database_url="", direct_url="", llm_api_key="k",
+        llm_base_url="https://example.test/v1", llm_model="m", llm_configured=True, reader_token="",
+        decision_token="", job_token="", signing_key_path="", sec_user_agent="",
+        web_origin="", decisions="model",
+    )
+    now = datetime.now(timezone.utc).isoformat()
+    proposal = {
+        "action": "LONG", "symbol": "TSLAUSDT", "size_frac": 0.05, "confidence": 0.6, "horizon_hours": 24,
+        "thesis": "t", "invalidation": "i", "cited_evidence_ids": ["ev_f"], "text": text,
+    }
+
+    class Ok:
+        status_code = 200
+
+        def json(self):
+            return {"choices": [{"message": {"content": json.dumps(proposal)}}]}
+
+    rows = [
+        {"id": "ev_f", "payload_hash": "a", "facts": {"form": "8-K"}, "event": {
+            "source": "sec-edgar", "instrument_id": "TSLAUSDT", "event_type": "filing",
+            "event_time_utc": now, "fetched_at_utc": now, "payload_hash": "a",
+            "payload": {"document_sha256": "0" * 64, "counted": True, "qualifies": True}}},
+        {"id": "ev_b", "payload_hash": "b", "facts": {"bid": 361.0, "ask": 361.2}, "event": {
+            "source": "bitget", "instrument_id": "TSLAUSDT", "event_type": "order_book",
+            "event_time_utc": now, "fetched_at_utc": now, "payload_hash": "b",
+            "payload": {"bid": 361.0, "ask": 361.2, "bids": [[361.0, 5.0]], "asks": [[361.2, 5.0]]}}},
+    ]
+    return decide_bounded(settings, rows, symbol="TSLAUSDT", transport=lambda *_a, **_k: Ok())
+
+
+def test_server_fixed_size_horizon_and_index_name_are_not_invented_numbers():
+    out = _bounded("Hold 0.05 for 24 hours on the residual versus the Nasdaq-100 reference near 361.2.")
+    assert out["reason"] == "awaiting_next_book"
+
+
+def test_an_invented_number_is_still_refused_and_named():
+    out = _bounded("The residual moved 3.1% on the filing.")
+    assert out["reason"] == "unverifiable_number"
+    assert out["unbound_numbers"] == ["3.1%"]
+
+
 def test_research_public_key_id():
     import FINAL_CANDIDATE.t2.signing as signing
 

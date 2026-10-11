@@ -29,12 +29,31 @@ export interface CycleSnapshot {
   scheduler: string | null;
   schedule: string | null;
   continuousOperation: boolean;
+  continuousOperationObserved: boolean;
   killSwitch: boolean;
   secEdgarStatus: string | null;
   modelCallsLatest: number | null;
   hf1Present: boolean;
   hf1EventCount: number | null;
   hf1Failed: boolean;
+  missedHours: number | null;
+  newestMissingHour: string | null;
+  gapFreeSince: string | null;
+  expectedHours: number | null;
+  recordedHours: number | null;
+  consecutiveRecordedHours: number | null;
+  latestDurationSeconds: number | null;
+  scheduledCycles: number | null;
+  preModelRefusals: number | null;
+  llmDecisions: number | null;
+  riskRefusals: number | null;
+  otherOutcomes: number | null;
+  paperFills: number | null;
+  fetchErrorRuns: number | null;
+}
+
+export function shownCount(value: number | null | undefined): string {
+  return typeof value === "number" ? String(value) : "n/a";
 }
 
 const NAMES: Record<string, string> = {
@@ -168,6 +187,10 @@ function anchorUnconfirmed(status?: string): boolean {
   return status === "pending" || status === "not_anchored" || !status;
 }
 
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function cycleFromOps(ops: {
   latest_run?: {
     status?: string;
@@ -187,14 +210,37 @@ function cycleFromOps(ops: {
   scheduler?: string;
   schedule?: string;
   continuous_operation?: boolean;
+  continuous_operation_observed?: boolean;
   kill_switch?: boolean;
   sources?: { sec_edgar?: { status?: string } };
+  operation?: {
+    expected_hours?: number;
+    recorded_hours?: number;
+    missing_hours?: string[];
+    consecutive_recorded_hours_ending_now?: number;
+    gap_free_since?: string | null;
+    latest_duration_seconds?: number | null;
+    continuous_operation_observed?: boolean;
+    counters?: {
+      scheduled_cycles?: number;
+      pre_model_refusals?: number;
+      llm_decisions?: number;
+      risk_refusals?: number;
+      other?: number;
+      paper_fills?: number;
+      fetch_error_runs?: number;
+    };
+  };
 }): CycleSnapshot {
   const latest = ops.latest_run;
   const detail = latest?.detail;
+  const operation = ops.operation;
+  const counters = operation?.counters;
+  const missing = Array.isArray(operation?.missing_hours) ? operation.missing_hours.filter((hour) => typeof hour === "string") : null;
+  const riskRefusals = finiteNumber(counters?.risk_refusals);
   return {
     decisionCount: typeof ops.decision_count === "number" ? ops.decision_count : latest?.decision_id ? 1 : 0,
-    refusalCount: latest?.status === "refused" ? 1 : 0,
+    refusalCount: riskRefusals ?? (latest?.status === "refused" ? 1 : 0),
     fillCount: typeof ops.fill_count === "number" ? ops.fill_count : 0,
     reason: latest?.reason || null,
     decisionId: latest?.decision_id || null,
@@ -209,12 +255,27 @@ function cycleFromOps(ops: {
     scheduler: ops.scheduler ?? null,
     schedule: ops.schedule ?? null,
     continuousOperation: ops.continuous_operation === true,
+    continuousOperationObserved: ops.continuous_operation_observed === true || operation?.continuous_operation_observed === true,
     killSwitch: ops.kill_switch === true,
     secEdgarStatus: ops.sources?.sec_edgar?.status ?? null,
     modelCallsLatest: typeof detail?.model_calls === "number" ? detail.model_calls : null,
     hf1Present: detail?.hf1 != null && typeof detail.hf1 === "object",
     hf1EventCount: Array.isArray(detail?.hf1?.events) ? detail.hf1.events.length : null,
     hf1Failed: typeof detail?.hf1?.error === "string" && detail.hf1.error.length > 0,
+    missedHours: missing ? missing.length : null,
+    newestMissingHour: missing && missing.length > 0 ? missing[0] : null,
+    gapFreeSince: typeof operation?.gap_free_since === "string" ? operation.gap_free_since : null,
+    expectedHours: finiteNumber(operation?.expected_hours),
+    recordedHours: finiteNumber(operation?.recorded_hours),
+    consecutiveRecordedHours: finiteNumber(operation?.consecutive_recorded_hours_ending_now),
+    latestDurationSeconds: finiteNumber(operation?.latest_duration_seconds),
+    scheduledCycles: finiteNumber(counters?.scheduled_cycles),
+    preModelRefusals: finiteNumber(counters?.pre_model_refusals),
+    llmDecisions: finiteNumber(counters?.llm_decisions),
+    riskRefusals,
+    otherOutcomes: finiteNumber(counters?.other),
+    paperFills: finiteNumber(counters?.paper_fills),
+    fetchErrorRuns: finiteNumber(counters?.fetch_error_runs),
   };
 }
 
@@ -492,8 +553,9 @@ export const liveDataProvider = {
     const cycle = cycleFromOps(ops);
     cycle.evaluationStatus = metrics?.evaluation?.status || metrics?.status || null;
     const activity = decisionBody?.items?.length ? activityFromDecisions(decisionBody.items) : activityFromCycle(cycle);
-    const riskRefusals = activity.filter((a) => a.governorCalled !== false && a.riskOutcome === "REFUSED").length;
-    cycle.refusalCount = riskRefusals;
+    if (cycle.riskRefusals == null) {
+      cycle.refusalCount = activity.filter((a) => a.governorCalled !== false && a.riskOutcome === "REFUSED").length;
+    }
     return {
       events,
       observations,

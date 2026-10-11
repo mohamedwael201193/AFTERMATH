@@ -130,11 +130,14 @@ def enter_later(pending: dict, books: list[dict]) -> dict:
     book = _later_book(books, pending.get("symbol"), pending.get("proposal_book_hash"), pending.get("proposal_fetched_at"))
     if book is None:
         return {"error": "no_later_book"}
+    fee_rate = _approved_fee(pending)
+    if fee_rate is None:
+        return {"error": "missing_fee"}
     proposal = {"action": pending.get("action"), "symbol": pending.get("symbol")}
     derived = derive_execution(proposal, [book], "model")
     if derived["error"]:
         return {"error": derived["error"]}
-    walk = paper_fill(int(pending["side"]), float(pending["notional"]), derived["ref_price"], derived["profile"], derived["fee_rate"])
+    walk = paper_fill(int(pending["side"]), float(pending["notional"]), derived["ref_price"], derived["profile"], fee_rate)
     if walk["status"] != "PAPER_FILLED":
         return {"error": walk.get("reason") or "unfilled"}
     return {
@@ -146,9 +149,20 @@ def enter_later(pending: dict, books: list[dict]) -> dict:
             "entry_ref": derived["ref_price"],
             "entry_profile": _json_profile(derived["profile"]),
             "opened_at": book.get("fetched_at_utc"),
-            "fee_rate": derived["fee_rate"],
+            "fee_rate": fee_rate,
         },
     }
+
+
+def _approved_fee(cost: dict) -> float | None:
+    """The contract taker fee approved with the trade. A book snapshot carries no fee of its own."""
+    try:
+        fee = float(cost.get("fee_rate"))
+    except (TypeError, ValueError):
+        return None
+    if fee != fee or fee < 0 or fee > 0.01:
+        return None
+    return fee
 
 
 def close_later(cost: dict, books: list[dict], now: datetime) -> dict:
@@ -165,10 +179,13 @@ def close_later(cost: dict, books: list[dict], now: datetime) -> dict:
     qty = float(entry.get("qty") or 0)
     if qty <= 0:
         return {"error": "missing_entry_qty"}
+    fee_rate = _approved_fee(cost)
+    if fee_rate is None:
+        return {"error": "missing_fee"}
     derived = derive_execution({"action": "LONG" if int(cost["side"]) > 0 else "SHORT", "symbol": cost["symbol"]}, [book], "model")
     if derived["error"]:
         return {"error": derived["error"]}
-    exit_walk = paper_fill(-int(cost["side"]), qty * derived["ref_price"], derived["ref_price"], derived["profile"], derived["fee_rate"])
+    exit_walk = paper_fill(-int(cost["side"]), qty * derived["ref_price"], derived["ref_price"], derived["profile"], fee_rate)
     if exit_walk["status"] != "PAPER_FILLED":
         return {"error": "exit_unfilled"}
     closed_at = _parse(book.get("fetched_at_utc")) or now

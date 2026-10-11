@@ -110,32 +110,182 @@ def _finite_positive(value: float) -> bool:
     return value == value and value not in (float("inf"), float("-inf")) and value > 0
 
 
-def contract_from_record(rec: dict, symbol: str) -> dict:
-    data = rec.get("data")
-    rows = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
-    row = next((item for item in rows if isinstance(item, dict) and item.get("symbol") == symbol), None)
-    if row is None and len(rows) == 1 and isinstance(rows[0], dict):
-        row = rows[0]
-    if not isinstance(row, dict):
-        raise ApiError("SCHEMA", "contract payload empty", 422)
-    if row.get("symbol") not in (None, symbol):
-        raise ApiError("SCHEMA", "contract symbol mismatch", 422)
-    status = row.get("symbolStatus")
-    is_rwa = row.get("isRwa")
+FUTURES_CATEGORY = "USDT-FUTURES"
+_PROVENANCE_KEYS = (
+    "instrument_category",
+    "metadata_source",
+    "funding_interval_hours",
+    "price_precision",
+    "quantity_precision",
+    "min_order_qty",
+    "field_sources",
+    "venue_status",
+    "quote_coin",
+    "symbol",
+)
+
+
+def _contract_rows(data) -> list[dict]:
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict):
+        return [data]
+    return []
+
+
+def _public_url(endpoint: object) -> str:
+    if not isinstance(endpoint, str) or not endpoint.strip():
+        raise ApiError("SCHEMA", "contract endpoint missing", 422)
+    bare = endpoint.split("?", 1)[0].strip()
+    if bare.startswith("https://") or bare.startswith("http://"):
+        url = bare
+    elif bare.startswith("/"):
+        url = "https://api.bitget.com" + bare
+    else:
+        raise ApiError("SCHEMA", "contract endpoint missing", 422)
+    host = url.split("://", 1)[-1].split("/", 1)[0]
+    if "@" in host or "?" in url or "/api/" not in url:
+        raise ApiError("SCHEMA", "contract endpoint missing", 422)
+    return url
+
+
+def _required_decimal(value: object, label: str) -> float:
+    if isinstance(value, bool) or value in (None, ""):
+        raise ApiError("SCHEMA", f"contract {label} missing", 422)
     try:
-        fee = float(row.get("takerFeeRate"))
+        number = float(value)
     except (TypeError, ValueError) as exc:
-        raise ApiError("SCHEMA", "contract fee missing", 422) from exc
-    if status != "normal" or is_rwa not in ("YES", "NO") or not _finite_number(fee) or fee < 0 or fee > 0.01:
-        raise ApiError("SCHEMA", "contract metadata incomplete", 422)
-    return {
+        raise ApiError("SCHEMA", f"contract {label} missing", 422) from exc
+    if not _finite_number(number):
+        raise ApiError("SCHEMA", f"contract {label} missing", 422)
+    return number
+
+
+def _required_whole(value: object, label: str, *, minimum: int) -> int:
+    number = _required_decimal(value, label)
+    if number < minimum or int(number) != number:
+        raise ApiError("SCHEMA", f"contract {label} missing", 422)
+    return int(number)
+
+
+def _optional_hours(value: object) -> int | None:
+    if isinstance(value, bool) or value in (None, ""):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not _finite_number(number) or number <= 0 or int(number) != number:
+        return None
+    return int(number)
+
+
+def contract_from_record(rec: dict, symbol: str) -> dict:
+    """USDT-FUTURES contract only. isRwa is read from this futures row when the venue sends it.
+
+    Live v2 mix contracts and v3 UTA instruments both return isRwa on USDT-FUTURES (YES on the
+    stock perps, NO on BTCUSDT). Spot instruments do not. A SPOT row is refused even if it
+    carries isRwa or isReality. Missing fee, funding interval, precision, or min qty is an
+    error; nothing is filled with zero or a generic fee.
+    """
+    rows = _contract_rows(rec.get("data"))
+    matched = [item for item in rows if item.get("symbol") == symbol]
+    if len(matched) != 1:
+        if any(item.get("symbol") not in (None, "", symbol) for item in rows):
+            raise ApiError("SCHEMA", "contract symbol mismatch", 422)
+        raise ApiError("SCHEMA", "contract payload empty", 422)
+    row = matched[0]
+    params = rec.get("params") if isinstance(rec.get("params"), dict) else {}
+    if params.get("symbol") not in (None, "", symbol):
+        raise ApiError("SCHEMA", "contract symbol mismatch", 422)
+    row_category = row.get("category")
+    param_category = params.get("productType") or params.get("category")
+    if row_category not in (None, "") and param_category not in (None, "") and row_category != param_category:
+        raise ApiError("SCHEMA", "contract category mismatch", 422)
+    category = row_category or param_category
+    if category != FUTURES_CATEGORY:
+        raise ApiError("SCHEMA", "contract category is not USDT-FUTURES", 422)
+    source = _public_url(rec.get("endpoint"))
+    raw_status = row.get("symbolStatus")
+    status_field = "symbolStatus"
+    if raw_status in (None, ""):
+        raw_status = row.get("status")
+        status_field = "status"
+    if raw_status not in ("normal", "online"):
+        raise ApiError("SCHEMA", "contract status not tradeable", 422)
+    contract_type = row.get("type")
+    symbol_type = row.get("symbolType")
+    if contract_type not in (None, ""):
+        if str(contract_type).lower() != "perpetual":
+            raise ApiError("SCHEMA", "contract is not a perpetual", 422)
+    elif symbol_type is None or str(symbol_type).lower() != "perpetual":
+        raise ApiError("SCHEMA", "contract is not a perpetual", 422)
+    if row.get("quoteCoin") != "USDT":
+        raise ApiError("SCHEMA", "contract quote is not USDT", 422)
+    is_rwa = row.get("isRwa")
+    if is_rwa not in ("YES", "NO"):
+        raise ApiError("SCHEMA", "futures isRwa missing", 422)
+    fee = _required_decimal(row.get("takerFeeRate"), "fee")
+    if fee < 0 or fee > 0.01:
+        raise ApiError("SCHEMA", "contract fee invalid", 422)
+    hours = _required_whole(row.get("fundInterval"), "funding interval", minimum=1)
+    if row.get("pricePrecision") not in (None, "") or row.get("quantityPrecision") not in (None, ""):
+        price_field, qty_field = "pricePrecision", "quantityPrecision"
+    elif row.get("pricePlace") not in (None, "") or row.get("volumePlace") not in (None, ""):
+        price_field, qty_field = "pricePlace", "volumePlace"
+    else:
+        raise ApiError("SCHEMA", "contract precision missing", 422)
+    price_precision = _required_whole(row.get(price_field), "price precision", minimum=0)
+    quantity_precision = _required_whole(row.get(qty_field), "quantity precision", minimum=0)
+    if row.get("minOrderQty") not in (None, ""):
+        qty_name = "minOrderQty"
+    elif row.get("minTradeNum") not in (None, ""):
+        qty_name = "minTradeNum"
+    else:
+        raise ApiError("SCHEMA", "contract min qty missing", 422)
+    min_qty = _required_decimal(row.get(qty_name), "min qty")
+    if min_qty <= 0:
+        raise ApiError("SCHEMA", "contract min qty missing", 422)
+    maker = row.get("makerFeeRate")
+    maker_fee = None
+    if maker not in (None, ""):
+        maker_fee = _required_decimal(maker, "maker fee")
+        if maker_fee < 0 or maker_fee > 0.01:
+            raise ApiError("SCHEMA", "contract fee invalid", 422)
+    def field(name: str) -> dict:
+        return {"category": FUTURES_CATEGORY, "endpoint": source, "field": name}
+    parsed = {
         "symbol": symbol,
-        "status": status,
+        "status": "normal",
+        "venue_status": raw_status,
         "is_rwa": is_rwa,
         "taker_fee_rate": fee,
+        "instrument_category": FUTURES_CATEGORY,
+        "metadata_source": source,
+        "funding_interval_hours": hours,
+        "price_precision": price_precision,
+        "quantity_precision": quantity_precision,
+        "min_order_qty": min_qty,
+        "quote_coin": "USDT",
+        "symbol_type": None if symbol_type in (None, "") else str(symbol_type),
+        "contract_type": "perpetual",
         "source": "bitget-live-contracts",
         "sha256": rec.get("sha256"),
+        "field_sources": {
+            "status": field(status_field),
+            "is_rwa": field("isRwa"),
+            "taker_fee_rate": field("takerFeeRate"),
+            "funding_interval_hours": field("fundInterval"),
+            "price_precision": field(price_field),
+            "quantity_precision": field(qty_field),
+            "min_order_qty": field(qty_name),
+            "quote_coin": field("quoteCoin"),
+        },
     }
+    if maker_fee is not None:
+        parsed["maker_fee_rate"] = maker_fee
+        parsed["field_sources"]["maker_fee_rate"] = field("makerFeeRate")
+    return parsed
 
 
 def closed_candles(rec: dict, end_ms: int) -> list[list]:
@@ -157,17 +307,43 @@ def closed_candles(rec: dict, end_ms: int) -> list[list]:
 
 
 def funding_from_record(rec: dict, symbol: str) -> dict:
+    params = rec.get("params") if isinstance(rec.get("params"), dict) else {}
+    category = params.get("productType") or params.get("category")
+    if category not in (None, "", FUTURES_CATEGORY):
+        raise ApiError("SCHEMA", "funding category is not USDT-FUTURES", 422)
     data = rec.get("data")
     row = data[0] if isinstance(data, list) and data else data if isinstance(data, dict) else None
     if not isinstance(row, dict):
         raise ApiError("SCHEMA", "funding payload empty", 422)
+    if row.get("symbol") not in (None, "", symbol):
+        raise ApiError("SCHEMA", "funding symbol mismatch", 422)
     try:
         rate = float(row.get("fundingRate"))
     except (TypeError, ValueError) as exc:
         raise ApiError("SCHEMA", "funding rate missing", 422) from exc
-    if not _finite_number(rate):
+    if isinstance(row.get("fundingRate"), bool) or not _finite_number(rate):
         raise ApiError("SCHEMA", "funding rate invalid", 422)
-    return {"symbol": symbol, "funding_rate": rate, "source": "bitget-live-funding", "sha256": rec.get("sha256")}
+    parsed = {"symbol": symbol, "funding_rate": rate, "source": "bitget-live-funding", "sha256": rec.get("sha256")}
+    if category:
+        parsed["instrument_category"] = category
+    interval = row.get("fundingRateInterval")
+    interval_field = "fundingRateInterval"
+    if interval in (None, ""):
+        interval = row.get("fundInterval")
+        interval_field = "fundInterval"
+    if interval not in (None, ""):
+        hours = _optional_hours(interval)
+        if hours is None:
+            raise ApiError("SCHEMA", "funding interval missing", 422)
+        parsed["funding_interval_hours"] = hours
+        if isinstance(rec.get("endpoint"), str) and rec.get("endpoint").strip():
+            source = _public_url(rec.get("endpoint"))
+            parsed["metadata_source"] = source
+            parsed["field_sources"] = {
+                "funding_rate": {"category": category or FUTURES_CATEGORY, "endpoint": source, "field": "fundingRate"},
+                "funding_interval_hours": {"category": category or FUTURES_CATEGORY, "endpoint": source, "field": interval_field},
+            }
+    return parsed
 
 
 def market_from_public(connector, symbol: str, end_ms: int, n_precedents: int) -> dict | None:
@@ -183,7 +359,7 @@ def market_from_public(connector, symbol: str, end_ms: int, n_precedents: int) -
     fit = hedge_fit(symbol_rows, reference_rows)
     if fit["hedge_r2"] is None or fit["hedge_beta"] is None:
         return None
-    return {
+    built = {
         "contract": {
             "status": contract["status"],
             "is_rwa": contract["is_rwa"],
@@ -195,6 +371,10 @@ def market_from_public(connector, symbol: str, end_ms: int, n_precedents: int) -
         "hedge_pairs": fit["pairs"],
         "reference": "QQQUSDT",
     }
+    for key in _PROVENANCE_KEYS:
+        if contract.get(key) is not None:
+            built[key] = contract[key]
+    return built
 
 
 def hedge_fit(symbol_rows: list[list], reference_rows: list[list]) -> dict:
