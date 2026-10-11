@@ -8,7 +8,6 @@ import {
   ReceiptText,
   ArrowLeft,
   X,
-  MoonStar,
   Search,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -40,79 +39,118 @@ function gapFreeSinceLabel(hour: string | null | undefined): string {
   return relativeToNow(iso);
 }
 
-function MarketStatusChips({ cycle }: { cycle: ReturnType<typeof useDashboardData>["cycle"] }) {
-  const scheduler = cycle?.scheduler ?? "unknown";
-  const schedule = cycle?.schedule ?? null;
-  const sec = cycle?.secEdgarStatus ?? "unknown";
-  const modelCalls = cycle?.modelCallsLatest;
+function humanStatus(value: string | null | undefined): string {
+  if (!value) return "n/a";
+  return value.replaceAll("_", " ");
+}
+
+function statusFacts(cycle: ReturnType<typeof useDashboardData>["cycle"]) {
   const kill = cycle?.killSwitch === true;
   const missed = cycle?.missedHours;
-  const newestMissed = cycle?.newestMissingHour;
+  const modelCalls = cycle?.modelCallsLatest;
+  const hf1 = cycle?.hf1Failed
+    ? "Scan failed · not a trade"
+    : cycle?.hf1Present
+      ? `Not selected · ${cycle.hf1EventCount ?? 0} events · not a trade`
+      : "Not in this cycle";
+  const schedule = cycle?.schedule ?? null;
+  const scheduler = cycle?.scheduler ?? null;
+  return [
+    { label: "Market", value: "USDT perpetuals", tone: "warn" as const },
+    {
+      label: "Cycle",
+      value: cycle?.continuousOperation ? "Continuous" : "Hourly · not continuous",
+      tone: "ok" as const,
+    },
+    { label: "Scheduler", value: humanStatus(scheduler), tone: "plain" as const },
+    ...(schedule && schedule !== scheduler
+      ? [{ label: "Schedule", value: humanStatus(schedule), tone: "plain" as const }]
+      : []),
+    { label: "SEC", value: humanStatus(cycle?.secEdgarStatus), tone: "plain" as const },
+    { label: "Precedents", value: String(cycle?.precedentCount ?? "n/a"), tone: "plain" as const },
+    {
+      label: "Missed hours",
+      value: missed == null ? "n/a" : `${missed} in 48h`,
+      title: cycle?.newestMissingHour ? `Newest missed hour ${cycle.newestMissingHour} UTC` : undefined,
+      tone: "plain" as const,
+    },
+    { label: "Gap-free since", value: gapFreeSinceLabel(cycle?.gapFreeSince), tone: "plain" as const },
+    { label: "Model calls", value: modelCalls == null ? "n/a" : String(modelCalls), tone: "plain" as const },
+    {
+      label: "Last cycle",
+      value: cycle?.latestDurationSeconds == null ? "n/a" : `${cycle.latestDurationSeconds.toFixed(1)} s`,
+      title: "Wall time of the latest completed paper cycle, including the evidence gate.",
+      tone: "plain" as const,
+    },
+    { label: "H-HF-1", value: hf1, tone: "plain" as const },
+    { label: "Kill switch", value: kill ? "On" : "Off", tone: kill ? ("risk" as const) : ("ok" as const) },
+    { label: "Mode", value: "Paper only", tone: "plain" as const },
+  ];
+}
 
+function MarketStatusChips({
+  cycle,
+  layout,
+}: {
+  cycle: ReturnType<typeof useDashboardData>["cycle"];
+  layout: "bar" | "stack";
+}) {
+  const facts = statusFacts(cycle);
+  if (layout === "stack") {
+    return (
+      <ul className="grid gap-1.5" aria-label="Operating status">
+        {facts.map((fact) => (
+          <li
+            key={fact.label}
+            title={"title" in fact ? fact.title : undefined}
+            className={cn(
+              "min-w-0 rounded-xl border px-2.5 py-1.5",
+              fact.tone === "warn" && "border-ink bg-warn-soft",
+              fact.tone === "ok" && "border-forest bg-forest-mist",
+              fact.tone === "risk" && "border-ink bg-risk-soft",
+              fact.tone === "plain" && "border-line-strong bg-warmwhite"
+            )}
+          >
+            <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-ink-soft">
+              {fact.label}
+            </span>
+            <span
+              className={cn(
+                "mt-0.5 block text-xs font-semibold leading-snug",
+                fact.tone === "warn" && "text-warn",
+                fact.tone === "ok" && "text-forest-deep",
+                fact.tone === "risk" && "text-risk",
+                fact.tone === "plain" && "text-ink"
+              )}
+            >
+              {fact.value}
+            </span>
+          </li>
+        ))}
+      </ul>
+    );
+  }
   return (
-    <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
-      <span className="inline-flex items-center gap-1.5 rounded-full border-2 border-ink bg-warn-soft px-2.5 py-1 text-warn">
-        <MoonStar className="h-3.5 w-3.5" aria-hidden="true" />
-        Bitget public market
-        <span className="hidden font-semibold text-ink-soft sm:inline">
-          · USDT perpetuals
+    <div className="flex w-max items-center gap-1.5" aria-label="Operating status">
+      {facts.map((fact) => (
+        <span
+          key={fact.label}
+          title={"title" in fact ? fact.title : undefined}
+          className={cn(
+            "inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] leading-none",
+            fact.tone === "warn" && "border-ink bg-warn-soft font-bold text-warn",
+            fact.tone === "ok" && "border-forest bg-forest-mist font-bold text-forest-deep",
+            fact.tone === "risk" && "border-ink bg-risk-soft font-bold uppercase text-risk",
+            fact.tone === "plain" && "border-line-strong bg-paper font-semibold text-ink-soft"
+          )}
+        >
+          {fact.tone === "ok" ? (
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-forest" aria-hidden="true" />
+          ) : null}
+          <span className="font-bold text-ink">{fact.label}</span>
+          <span>{fact.value}</span>
         </span>
-      </span>
-      <span className="inline-flex items-center gap-1.5 rounded-full border-2 border-ink bg-forest-mist px-2.5 py-1 text-forest-deep">
-        <span className="relative flex h-2 w-2" aria-hidden="true">
-          <span className="absolute inline-flex h-full w-full animate-pulse-ring rounded-full bg-forest" />
-          <span className="relative inline-flex h-2 w-2 rounded-full bg-forest" />
-        </span>
-        {cycle?.continuousOperation ? "Continuous" : "Hourly cycle · not continuous"}
-        {schedule ? (
-          <span className="hidden font-semibold text-ink-soft sm:inline">· {schedule}</span>
-        ) : null}
-      </span>
-      <span className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft">
-        Scheduler · {scheduler}
-      </span>
-      <span className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft">
-        SEC · {sec}
-      </span>
-      <span className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft">
-        Precedents · {cycle?.precedentCount ?? "n/a"}
-      </span>
-      <span
-        className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft"
-        title={newestMissed ? `Newest missed hour ${newestMissed} UTC` : missed === 0 ? "No missed hour in the trailing 48h" : undefined}
-      >
-        Missed hours (48h) · {missed == null ? "n/a" : missed}
-      </span>
-      <span className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft">
-        Gap-free since · {gapFreeSinceLabel(cycle?.gapFreeSince)}
-      </span>
-      <span className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft">
-        Last cycle model calls · {modelCalls == null ? "n/a" : modelCalls}
-      </span>
-      <span
-        className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft"
-        title="Wall time of the latest completed paper cycle, including the evidence gate. The model was not called when model calls are 0."
-      >
-        Last cycle · {cycle?.latestDurationSeconds == null ? "n/a" : `${cycle.latestDurationSeconds.toFixed(1)} s`}
-      </span>
-      <span className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft">
-        {cycle?.hf1Failed
-          ? "H-HF-1 · scan failed · not a trade"
-          : cycle?.hf1Present
-            ? `H-HF-1 · not selected · ${cycle.hf1EventCount ?? 0} events · not a trade`
-            : "H-HF-1 · not in this cycle"}
-      </span>
-      <span
-        className={cn(
-          "rounded-full border-2 px-2.5 py-1 font-bold uppercase tracking-wide",
-          kill ? "border-ink bg-risk-soft text-risk" : "border-forest bg-forest-mist text-forest-deep"
-        )}
-      >
-        Kill switch · {kill ? "on" : "off"}
-      </span>
-      <span className="hidden rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft md:inline">
-        Production API · paper only
-      </span>
+      ))}
     </div>
   );
 }
@@ -128,7 +166,7 @@ function SidebarNav({
   const setTab = useDashboardStore((s) => s.setTab);
 
   return (
-    <>
+    <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center justify-between px-5 pt-5">
         <AftermathWordmark />
       </div>
@@ -166,8 +204,10 @@ function SidebarNav({
         })}
       </nav>
 
-      <div className="mt-auto grid gap-3 px-5 pb-5">
-        <MarketStatusChips cycle={cycle} />
+      <div className="mt-4 min-h-0 flex-1 overflow-y-auto px-3 scroll-slim">
+        <MarketStatusChips cycle={cycle} layout="stack" />
+      </div>
+      <div className="grid shrink-0 gap-3 bg-paper px-3 pb-4 pt-3">
         <div className="flex items-center justify-between">
           <Button
             variant="outline"
@@ -180,7 +220,7 @@ function SidebarNav({
           <SettingsDialog />
         </div>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -274,14 +314,14 @@ export function DashboardShell({ onExit }: { onExit: () => void }) {
   const closePanel = () => selectEvent(null);
 
   return (
-    <div className="flex min-h-[calc(100vh-1rem)] flex-col lg:min-h-0 lg:flex-row lg:items-stretch">
+    <div className="flex min-h-[calc(100dvh-1rem)] flex-col sm:min-h-[calc(100dvh-1.5rem)] lg:h-[calc(100dvh-3rem)] lg:max-h-[calc(100dvh-3rem)] lg:min-h-0 lg:flex-row lg:items-stretch lg:overflow-hidden">
       {/* desktop sidebar */}
-      <aside className="sticky top-0 hidden h-auto w-[248px] shrink-0 flex-col border-r-2 border-line bg-paper lg:flex">
+      <aside className="hidden h-full w-[248px] shrink-0 flex-col overflow-hidden border-r-2 border-line bg-paper lg:flex">
         <SidebarNav onExit={onExit} cycle={cycle} />
       </aside>
 
       {/* main column */}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* header */}
         <header className="sticky top-0 z-30 border-b-2 border-line bg-warmwhite/95 px-4 py-3 backdrop-blur sm:px-6">
           <div className="flex items-center gap-3">
@@ -292,7 +332,7 @@ export function DashboardShell({ onExit }: { onExit: () => void }) {
             >
               <ArrowLeft className="h-4 w-4" aria-hidden="true" />
             </button>
-            <div className="relative order-3 min-w-0 flex-1 lg:order-none lg:max-w-xs">
+            <div className="relative order-3 min-w-0 flex-1 lg:order-none lg:max-w-md">
               <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-soft" aria-hidden="true" />
               <label htmlFor="dash-search" className="sr-only">
                 Search events and instruments
@@ -309,20 +349,17 @@ export function DashboardShell({ onExit }: { onExit: () => void }) {
                 className="h-9 w-full rounded-full border-2 border-ink bg-paper pl-10 pr-4 text-sm font-semibold text-ink placeholder:text-ink-soft/70 focus-visible:outline-forest"
               />
             </div>
-            <div className="hidden min-w-0 lg:block">
-              <MarketStatusChips cycle={cycle} />
-            </div>
             <div className="ml-auto shrink-0 lg:hidden">
               <SettingsDialog />
             </div>
           </div>
-          <div className="mt-2.5 lg:hidden">
-            <MarketStatusChips cycle={cycle} />
+          <div className="mt-2.5 overflow-x-auto scroll-slim">
+            <MarketStatusChips cycle={cycle} layout="bar" />
           </div>
         </header>
 
         {/* body: tab content + detail panel */}
-        <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto xl:flex-row scroll-slim">
           <main
             id="dashboard-main"
             className="@container min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8"
