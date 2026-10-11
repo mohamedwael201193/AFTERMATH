@@ -51,7 +51,8 @@ function SectionTitle({
 export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
   const detailedRisk = useDashboardStore((s) => s.settings.detailedRisk);
   const { event, instrument, observation, evidence, decision, risk, execution, receipt, priceSeries } = bundle;
-  const isBookObservation = !!observation && !event.id.startsWith("dec_");
+  const isStoredRow = !event.id.startsWith("dec_");
+  const isWarmup = event.category === "FILING";
 
   const concerns = useMemo(() => {
     const list: Array<{ tone: "warn" | "risk"; text: string }> = [];
@@ -94,9 +95,9 @@ export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
               {instrument?.name ?? "No instrument"} · {event.source.name}
             </p>
           </div>
-          {isBookObservation ? (
+          {isStoredRow ? (
             <span className="ml-auto shrink-0 rounded-full border border-line-strong bg-paper px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-ink-soft">
-              Observation
+              {isWarmup ? "Warm-up" : "Observation"}
             </span>
           ) : (
             <DecisionBadge state={decision.state} size="lg" className="ml-auto" />
@@ -145,7 +146,7 @@ export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
       {/* ── 3 · the decision ───────────────────────────────── */}
       <section className="grid grid-cols-1 gap-3">
         <SectionTitle icon={BrainCircuit} step="03">
-          {isBookObservation
+          {isStoredRow
             ? "Not an AI decision"
             : decision.modelCalled === false
               ? "MODEL NOT CALLED — PRE-MODEL REFUSAL"
@@ -153,16 +154,18 @@ export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
         </SectionTitle>
         <div className="overflow-hidden rounded-3xl border-2 border-ink bg-warmwhite shadow-[0_4px_0_rgba(23,25,22,0.85)]">
           <div className="flex flex-wrap items-center gap-4 border-b-2 border-line bg-paper px-5 py-4">
-            {isBookObservation ? (
+            {isStoredRow ? (
               <span className="rounded-full border-2 border-line-strong bg-paper px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-ink-soft">
-                Book observation only
+                {isWarmup ? "Warm-up reaction only" : "Book observation only"}
               </span>
             ) : (
               <DecisionBadge state={decision.state} size="lg" />
             )}
-            {isBookObservation ? (
+            {isStoredRow ? (
               <p className="text-sm font-semibold text-ink-soft">
-                This row is a stored Bitget book snapshot. The model and the governor were not called for this symbol.
+                {isWarmup
+                  ? "This row is a historical Item 2.02 residual. It can raise the precedent count. It is not a model decision and not a scored outcome."
+                  : "This row is a stored Bitget book snapshot. The model and the governor were not called for this symbol."}
               </p>
             ) : decision.modelCalled === false ? (
               <p className="text-sm font-semibold text-ink-soft">No model confidence — the model was not called.</p>
@@ -269,11 +272,13 @@ export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
       {/* ── 5 · risk engine ────────────────────────────────── */}
       <section className="grid grid-cols-1 gap-3">
         <SectionTitle icon={ShieldCheck} step="05">What does the risk engine say?</SectionTitle>
-        {decision.modelCalled === false || isBookObservation ? (
+        {decision.modelCalled === false || isStoredRow ? (
           <p className="rounded-3xl border-2 border-line-strong bg-paper px-5 py-4 text-sm leading-relaxed text-ink">
-            {isBookObservation
-              ? "This observation has no risk verdict. It is not a governor block."
-              : "The governor was not called. This is not a risk-engine block."}
+            {isWarmup
+              ? "This warm-up row has no risk verdict. It is not a governor block."
+              : isStoredRow
+                ? "This observation has no risk verdict. It is not a governor block."
+                : "The governor was not called. This is not a risk-engine block."}
           </p>
         ) : (
         <div className="overflow-hidden rounded-3xl border-2 border-ink bg-warmwhite shadow-[0_4px_0_rgba(23,25,22,0.85)]">
@@ -368,9 +373,11 @@ export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
                 <p className="mt-1 text-sm font-semibold text-ink-soft">
                   {execution.kind === "REFUSAL"
                     ? "The risk engine blocked execution."
-                    : isBookObservation
-                      ? "No order was sent. This book row is not a trade or a fill."
-                      : "Nothing to execute."}
+                    : isWarmup
+                      ? "No order was sent. A warm-up residual is not a trade or a fill."
+                      : isStoredRow
+                        ? "No order was sent. This book row is not a trade or a fill."
+                        : "Nothing to execute."}
                 </p>
               </>
             )}
@@ -416,7 +423,7 @@ export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
         <SectionTitle icon={Stamp} step="07">Can the result be verified?</SectionTitle>
         <ReceiptCard
           receipt={receipt}
-          heading={isBookObservation ? "Receipt" : "Decision receipt"}
+          heading={isStoredRow ? "Receipt" : "Decision receipt"}
         />
         <p className="text-xs text-ink-soft">
           {DECISION_META[decision.state].plain}

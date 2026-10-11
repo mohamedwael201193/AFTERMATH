@@ -63,6 +63,35 @@ def warmup_event(
     }
 
 
+def closes_around(event_ms: int, stock_rows: list, ref_rows: list) -> dict | None:
+    """Pair the last closed hour before the filing with the first closed hour after it.
+
+    Each row is [open_ms, close]. A bar is usable only when both symbols have that open time.
+    A missing bar stays missing.
+    """
+    stock = {}
+    ref = {}
+    for row in stock_rows:
+        stock[int(row[0])] = float(row[1])
+    for row in ref_rows:
+        ref[int(row[0])] = float(row[1])
+    shared = sorted(set(stock) & set(ref))
+    before = [stamp for stamp in shared if stamp + 3_600_000 <= int(event_ms)]
+    after = [stamp for stamp in shared if stamp >= int(event_ms)]
+    if not before or not after:
+        return None
+    opened_before = before[-1]
+    opened_after = after[0]
+    return {
+        "stock_before": stock[opened_before],
+        "stock_after": stock[opened_after],
+        "ref_before": ref[opened_before],
+        "ref_after": ref[opened_after],
+        "before_open_ms": opened_before,
+        "after_open_ms": opened_after,
+    }
+
+
 def store_warmup(store, event: dict | None) -> bool:
     """Insert one warm-up row. It does not create a fill or a decision."""
     if not event:
@@ -70,5 +99,16 @@ def store_warmup(store, event: dict | None) -> bool:
     accession = (event.get("payload") or {}).get("accession")
     if accession and store.has_accession(accession):
         return False
-    store.insert_event(event)
+    from ..ids import SCHEMA_VERSION, payload_hash, utc_now
+
+    payload = dict(event.get("payload") or {})
+    row = {
+        **event,
+        "schema_version": SCHEMA_VERSION,
+        "payload": payload,
+        "payload_hash": payload_hash(payload),
+        "conflict": False,
+        "created_at_utc": utc_now(),
+    }
+    store.insert_event(row)
     return True

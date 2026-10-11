@@ -266,6 +266,8 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
             "fill_count": counts["fill_count"],
             "decision_count": counts["decision_count"],
             "event_count": counts["event_count"],
+            "book_count": counts["book_count"],
+            "precedent_count": counts["precedent_count"],
             "paper_only": True,
             "kill_switch": os.environ.get("AFTERMATH_KILL") == "1",
             "sources": {"sec_edgar": {"status": sec, "reason": None if settings.sec_user_agent else "sec_user_agent_missing"}},

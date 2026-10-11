@@ -189,11 +189,22 @@ class MemoryStore:
             receipt = self.receipt_for_decision(run["decision_id"])
             run = {**run, "receipt_id": None if receipt is None else receipt["id"]}
         opened = [row for row in self.fills.values() if row.get("status") in ("PAPER_FILLED", "CLOSED")]
+        books = 0
+        precedents = 0
+        for row in self.events.values():
+            payload = row.get("payload") or {}
+            if row.get("event_type") == "book":
+                books += 1
+            reaction = payload.get("reaction_bp")
+            if payload.get("counted") is True and isinstance(reaction, (int, float)) and not isinstance(reaction, bool):
+                precedents += 1
         return {
             "latest_run": run,
             "fill_count": len(opened),
             "decision_count": len(self.decisions),
             "event_count": len(self.events),
+            "book_count": books,
+            "precedent_count": precedents,
         }
 
     def run_for_key(self, key: str) -> dict | None:
@@ -555,7 +566,15 @@ class PostgresStore:
         """Counts and the latest run in one database session."""
         with self._connect() as conn:
             decisions = conn.execute(f"SELECT COUNT(*) FROM {self.schema}.decisions").fetchone()[0]
-            events = conn.execute(f"SELECT COUNT(*) FROM {self.schema}.events").fetchone()[0]
+            events, books, precedents = conn.execute(
+                f"""SELECT COUNT(*),
+                           COUNT(*) FILTER (WHERE event_type = 'book'),
+                           COUNT(*) FILTER (
+                             WHERE payload->>'counted' = 'true'
+                               AND jsonb_typeof(payload->'reaction_bp') = 'number'
+                           )
+                    FROM {self.schema}.events"""
+            ).fetchone()
             fills = conn.execute(
                 f"SELECT COUNT(*) FROM {self.schema}.paper_fills WHERE status IN ('PAPER_FILLED', 'CLOSED')"
             ).fetchone()[0]
@@ -580,6 +599,8 @@ class PostgresStore:
             "fill_count": int(fills),
             "decision_count": int(decisions),
             "event_count": int(events),
+            "book_count": int(books),
+            "precedent_count": int(precedents),
         }
 
     def run_for_key(self, key: str) -> dict | None:

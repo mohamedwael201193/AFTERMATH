@@ -70,11 +70,12 @@ export function OverviewPanel({
         <SummaryCard
           icon={Zap}
           label="Stored books"
-          value={String(cycle?.eventCount ?? events.length)}
+          value={String(cycle?.bookCount ?? cycle?.eventCount ?? events.length)}
           hint="order books, not filings or decisions"
           detail={
             <p className="text-[11px] font-semibold text-ink-soft">
-              {observations.length} symbols · latest {events[0] ? relativeToNow(events[0].occurredAt) : "—"}
+              {observations.length} symbols · precedents {cycle?.precedentCount ?? 0} · latest{" "}
+              {events[0] ? relativeToNow(events[0].occurredAt) : "—"}
             </p>
           }
         />

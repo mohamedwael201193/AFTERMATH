@@ -7,7 +7,7 @@ from aftermath_api.config import Settings
 from aftermath_api.cycle import run_paper_cycle
 from aftermath_api.errors import ApiError
 from aftermath_api.sources.edgar import attach_document, fetch_filings, filing_from_submissions
-from aftermath_api.sources.warmup import residual_bp, store_warmup, warmup_event
+from aftermath_api.sources.warmup import closes_around, residual_bp, store_warmup, warmup_event
 from aftermath_api.store import MemoryStore
 
 
@@ -310,6 +310,9 @@ def test_warmup_reactions_count_and_do_not_become_outcomes():
     fresh = now - timedelta(minutes=30)
     store = MemoryStore()
     assert residual_bp(100, 101, 400, 400) == 100
+    paired = closes_around(3_600_000, [[0, 100.0], [3_600_000, 101.0]], [[0, 400.0], [3_600_000, 400.0]])
+    assert paired["stock_before"] == 100.0 and paired["stock_after"] == 101.0
+    assert closes_around(4_000_000, [[0, 100.0]], [[3_600_000, 400.0]]) is None
     assert residual_bp(100, None, 400, 400) is None
     assert warmup_event(
         symbol="NVDAUSDT", accession="warm-fresh", event_time=fresh, now=now,
@@ -322,9 +325,16 @@ def test_warmup_reactions_count_and_do_not_become_outcomes():
     assert store_warmup(store, event) is True
     assert store_warmup(store, event) is False
     assert store.count_reactions() == 1
+    counts = store.dashboard_counts()
+    assert counts["precedent_count"] == 1
+    assert counts["book_count"] == 0
+    assert counts["fill_count"] == 0
     assert store.fills == {}
     assert store.decisions == {}
     stored = next(iter(store.events.values()))
     assert stored["payload"]["warmup"] is True
     assert stored["payload"]["counted_outcome"] is False
     assert stored["payload"]["reaction_bp"] == 100
+    assert stored["schema_version"] == 1
+    assert len(stored["payload_hash"]) == 64
+    assert stored["conflict"] is False

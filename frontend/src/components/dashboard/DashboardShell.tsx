@@ -65,6 +65,9 @@ function MarketStatusChips({ cycle }: { cycle: ReturnType<typeof useDashboardDat
         SEC · {sec}
       </span>
       <span className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft">
+        Precedents · {cycle?.precedentCount ?? "n/a"}
+      </span>
+      <span className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft">
         Last cycle model calls · {modelCalls == null ? "n/a" : modelCalls}
       </span>
       <span
@@ -188,9 +191,9 @@ function DetailPanelContent({ onClose }: { onClose: () => void }) {
       <div className="flex items-center justify-between gap-3 border-b-2 border-line bg-paper px-5 py-3.5">
         <p className="text-xs font-bold uppercase tracking-[0.14em] text-ink-soft">
           {bundle
-            ? bundle.observation && !bundle.event.id.startsWith("dec_")
-              ? "Observation Details"
-              : "Decision record"
+            ? bundle.event.id.startsWith("dec_")
+              ? "Decision record"
+              : "Observation Details"
             : selectedEventId.startsWith("dec_")
               ? "Decision record"
               : "Observation Details"}
@@ -208,7 +211,7 @@ function DetailPanelContent({ onClose }: { onClose: () => void }) {
           <div className="grid h-full place-items-center gap-3 text-center">
             <span className="h-8 w-8 animate-spin rounded-full border-[3px] border-line-strong border-t-forest" aria-hidden="true" />
             <p className="text-sm font-semibold text-ink-soft">
-              Loading the decision record…
+              Loading the record…
             </p>
           </div>
         ) : (

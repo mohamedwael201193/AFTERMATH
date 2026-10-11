@@ -24,6 +24,8 @@ export interface CycleSnapshot {
   stale: boolean;
   evaluationStatus: string | null;
   eventCount: number | null;
+  bookCount: number | null;
+  precedentCount: number | null;
   scheduler: string | null;
   schedule: string | null;
   continuousOperation: boolean;
@@ -65,7 +67,24 @@ function freshness(iso: string): MarketObservation["freshness"] {
 function asEvent(row: Record<string, unknown>): MarketEvent {
   const payload = (row.payload || {}) as Record<string, unknown>;
   const book = row.event_type === "book";
+  const filing = row.event_type === "filing";
   const symbol = String(row.instrument_id || "");
+  if (filing) {
+    const reaction = typeof payload.reaction_bp === "number" ? `${payload.reaction_bp} bp` : "missing";
+    const accession = typeof payload.accession === "string" ? payload.accession : "missing";
+    return {
+      id: String(row.id),
+      headline: `Historical warm-up reaction ${symbol}`,
+      summary: `Item 2.02 accession ${accession}, accepted ${String(row.event_time_utc)}. Residual ${reaction} versus QQQUSDT. This row can raise the precedent count. It is not a model decision, not a paper fill, and not a scored outcome.`,
+      instrumentSymbol: symbol || null,
+      category: "FILING",
+      occurredAt: String(row.event_time_utc || row.fetched_at_utc),
+      source: { id: "sec-edgar", name: "SEC EDGAR", kind: "SEC_EDGAR", trust: "PRIMARY" },
+      evidenceCompleteness: null,
+      decisionState: "NO ACTION",
+      status: "RESOLVED",
+    };
+  }
   return {
     id: String(row.id),
     headline: book ? `Bitget order book ${symbol}` : `${row.event_type} ${symbol}`,
@@ -159,6 +178,8 @@ function cycleFromOps(ops: {
   fill_count?: number;
   decision_count?: number;
   event_count?: number;
+  book_count?: number;
+  precedent_count?: number;
   stale?: boolean;
   scheduler?: string;
   schedule?: string;
@@ -180,6 +201,8 @@ function cycleFromOps(ops: {
     stale: ops.stale === true,
     evaluationStatus: null,
     eventCount: typeof ops.event_count === "number" ? ops.event_count : null,
+    bookCount: typeof ops.book_count === "number" ? ops.book_count : null,
+    precedentCount: typeof ops.precedent_count === "number" ? ops.precedent_count : null,
     scheduler: ops.scheduler ?? null,
     schedule: ops.schedule ?? null,
     continuousOperation: ops.continuous_operation === true,
@@ -347,29 +370,45 @@ export const liveDataProvider = {
     if (!row?.id) return null;
     const event = asEvent(row);
     const observation = asObservation(row);
+    const payload = (row.payload || {}) as Record<string, unknown>;
+    const filing = row.event_type === "filing";
     const ops = (await readJson("/v1/ops/status")) as { latest_run?: { reason?: string; decision_id?: string; receipt_id?: string } };
     const reason = ops.latest_run?.reason || "no decision recorded for this event";
+    const accession = typeof payload.accession === "string" ? payload.accession : "missing";
+    const reaction = typeof payload.reaction_bp === "number" ? payload.reaction_bp : null;
     const evidence: EvidenceRecord[] = [{
       id: String(row.id),
       eventId,
-      label: row.event_type === "book" ? "Bitget order book" : "Bitget ticker",
+      label: filing ? "SEC 8-K Item 2.02 warm-up" : row.event_type === "book" ? "Bitget order book" : "Bitget ticker",
       source: event.source,
       capturedAt: event.occurredAt,
-      value: observation ? `${observation.priceUsd} mid` : `last ${String((row.payload as Record<string, unknown> | undefined)?.last ?? "unavailable")}`,
-      numericValue: observation?.priceUsd ?? null,
-      unit: "USDT",
+      value: filing
+        ? `accession ${accession}; residual ${reaction == null ? "missing" : reaction + " bp"}`
+        : observation
+          ? `${observation.priceUsd} mid`
+          : `last ${String(payload.last ?? "unavailable")}`,
+      numericValue: filing ? reaction : observation?.priceUsd ?? null,
+      unit: filing ? "bp" : "USDT",
       freshness: observation?.freshness || "STALE",
-      whyItMatters: "The paper cycle refuses a trade when the book is missing, wide, thin, or no qualifying event is attached.",
-      verification: row.event_type === "book" ? "SOURCE_CONFIRMED" : "UNVERIFIED",
+      whyItMatters: filing
+        ? "A warm-up residual can satisfy the precedent count. It is not a scored outcome and it does not authorize a trade."
+        : "The paper cycle refuses a trade when the book is missing, wide, thin, or no qualifying event is attached.",
+      verification: filing || row.event_type === "book" ? "SOURCE_CONFIRMED" : "UNVERIFIED",
     }];
     const decision: AIDecision = {
       eventId,
       state: "NO ACTION",
       confidence: 0,
-      plainLanguage: `Latest paper cycle: ${reason}. This symbol row is a stored observation, not its own decision. The model and the governor were not called.`,
+      plainLanguage: filing
+        ? "Historical warm-up reaction. The model and the governor were not called for this accession."
+        : `Latest paper cycle: ${reason}. This symbol row is a stored observation, not its own decision. The model and the governor were not called.`,
       modelCalled: false,
-      reasoning: ["MODEL NOT CALLED — PRE-MODEL REFUSAL", reason],
-      invalidationConditions: ["A verified event tied to this instrument would be required before a proposal."],
+      reasoning: filing
+        ? ["WARM-UP REACTION — NOT A CYCLE DECISION", `accession ${accession}`]
+        : ["MODEL NOT CALLED — PRE-MODEL REFUSAL", reason],
+      invalidationConditions: filing
+        ? ["This row stays out of the paired metric sample."]
+        : ["A verified event tied to this instrument would be required before a proposal."],
       proposedAction: null,
     };
     const risk: RiskEngineResult = {
