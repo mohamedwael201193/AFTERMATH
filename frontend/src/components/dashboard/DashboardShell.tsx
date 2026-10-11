@@ -70,6 +70,13 @@ function MarketStatusChips({ cycle }: { cycle: ReturnType<typeof useDashboardDat
       <span className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft">
         Last cycle model calls · {modelCalls == null ? "n/a" : modelCalls}
       </span>
+      <span className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft">
+        {cycle?.hf1Failed
+          ? "H-HF-1 · scan failed · not a trade"
+          : cycle?.hf1Present
+            ? `H-HF-1 · not selected · ${cycle.hf1EventCount ?? 0} events · not a trade`
+            : "H-HF-1 · not in this cycle"}
+      </span>
       <span
         className={cn(
           "rounded-full border-2 px-2.5 py-1 font-bold uppercase tracking-wide",

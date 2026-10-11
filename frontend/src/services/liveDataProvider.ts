@@ -32,6 +32,9 @@ export interface CycleSnapshot {
   killSwitch: boolean;
   secEdgarStatus: string | null;
   modelCallsLatest: number | null;
+  hf1Present: boolean;
+  hf1EventCount: number | null;
+  hf1Failed: boolean;
 }
 
 const NAMES: Record<string, string> = {
@@ -173,7 +176,7 @@ function cycleFromOps(ops: {
     receipt_id?: string;
     finished_at_utc?: string;
     started_at_utc?: string;
-    detail?: { model_calls?: number };
+    detail?: { model_calls?: number; hf1?: { events?: unknown; error?: string } | null };
   };
   fill_count?: number;
   decision_count?: number;
@@ -209,6 +212,9 @@ function cycleFromOps(ops: {
     killSwitch: ops.kill_switch === true,
     secEdgarStatus: ops.sources?.sec_edgar?.status ?? null,
     modelCallsLatest: typeof detail?.model_calls === "number" ? detail.model_calls : null,
+    hf1Present: detail?.hf1 != null && typeof detail.hf1 === "object",
+    hf1EventCount: Array.isArray(detail?.hf1?.events) ? detail.hf1.events.length : null,
+    hf1Failed: typeof detail?.hf1?.error === "string" && detail.hf1.error.length > 0,
   };
 }
 
