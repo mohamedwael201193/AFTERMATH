@@ -356,9 +356,22 @@ def test_isolated_lifecycle_approve_pending_fill_close_receipt_and_tamper(tmp_pa
     assert opened["cost_json"]["entry_book_hash"] == "entry-book"
     assert lifecycle_intact(store, opened["id"])
 
+    mark_at = (datetime.fromisoformat(opened_at) + timedelta(hours=1)).isoformat()
+    mark_book = _book(mark_at, "mark-book", 100.49, 100.51, [[100.49, 10]], [[100.51, 10]])
+    advance_positions(store, [mark_book], datetime.fromisoformat(mark_at), signing_path=str(private))
+    marked = store.fill_for_key(fill_key)
+    assert marked["status"] == "PAPER_FILLED"
+    assert marked["cost_json"]["mark"]["book_hash"] == "mark-book"
+    assert marked["cost_json"]["mark"]["counted_outcome"] is False
+    assert "outcome_bp" not in marked["cost_json"]
+    assert lifecycle_intact(store, marked["id"])
+    signed_before_repeat = len(store.list_ledger())
+    advance_positions(store, [mark_book], datetime.fromisoformat(mark_at), signing_path=str(private))
+    assert len(store.list_ledger()) == signed_before_repeat
+
     store.update_fill(
-        opened["id"],
-        cost_json={**opened["cost_json"], "funding_rates": [0.0001, 0.0001, 0.0001]},
+        marked["id"],
+        cost_json={**marked["cost_json"], "funding_rates": [0.0001, 0.0001, 0.0001]},
     )
     advance_positions(store, [exit_book], datetime.fromisoformat(exit_at), signing_path=str(private))
     closed = store.fill_for_key(fill_key)
@@ -372,7 +385,7 @@ def test_isolated_lifecycle_approve_pending_fill_close_receipt_and_tamper(tmp_pa
     assert receipt is not None
     assert verify_line(public, receipt["line"]) is True
     transitions = [line for line in store.list_ledger() if (line.get("body") or {}).get("kind") == "fill_transition"]
-    assert [line["body"]["status"] for line in transitions] == ["PAPER_FILLED", "CLOSED"]
+    assert [line["body"]["status"] for line in transitions] == ["PAPER_FILLED", "PAPER_FILLED", "CLOSED"]
     assert all(verify_line(public, line) for line in transitions)
     assert chain_intact(public, store.list_ledger())
     tampered = {**receipt["line"], "body": {**receipt["line"]["body"], "status": "CLOSED"}}
