@@ -60,22 +60,42 @@ def test_later_book_entry_and_exit_match_the_cost_model():
     assert opened["cost_json"]["entry"]["vwap"] == 100.0
     assert opened["cost_json"]["entry"]["fee_usdt"] == 0.06
     exit_book = _book(exit_at, "exit-book", 100.99, 101.01, [[101.0, 10]], [[101.02, 10]])
+    opened["cost_json"]["funding_rates"] = [0.0001, 0.0001, 0.0001]
     closed = close_later(opened["cost_json"], [exit_book], datetime.fromisoformat(exit_at))
-    # Buy 1 unit at 100, sell at 101. Fees 0.06 and 0.0606. Funding is 1 bp per 8h for 3 settlements.
+    # Buy 1 unit at 100, sell at 101. Fees 0.06 and 0.0606. Three venue prints of 1 bp.
     assert closed["cost_json"]["gross_usdt"] == 1.0
     assert closed["cost_json"]["fees_usdt"] == 0.1206
     assert closed["cost_json"]["funding_usdt"] == 0.03
+    assert closed["cost_json"]["funding_source"] == "venue_funding"
     assert closed["cost_json"]["net_usdt"] == 0.8494
     assert closed["cost_json"]["outcome_bp"] == 84.94
     assert closed["cost_json"]["exit_book_hash"] == "exit-book"
     baselines = closed["cost_json"]["baselines"]
     assert baselines["fixed_sign_bp"] == 84.94
     assert baselines["llm_off_bp"] == 0
+    assert baselines["llm_off_policy"] == "identical_to_no_trade"
     assert baselines["no_trade_bp"] == 0
     assert baselines["random_bp"] is not None
     report = evaluate(paired_from_fills([{"cost_json": closed["cost_json"]}]))
     assert report["status"] == "INSUFFICIENT_DATA"
     assert report["sample_size"] == 1
+
+
+def test_missing_funding_is_not_replaced_with_one_basis_point():
+    proposed = "2026-10-10T12:00:00+00:00"
+    opened_at = "2026-10-10T13:00:00+00:00"
+    exit_at = (datetime.fromisoformat(opened_at) + timedelta(hours=24, seconds=1)).isoformat()
+    opened = enter_later(_pending(proposed, "proposal-book"), [_book(opened_at, "entry-book", 99.99, 100.01, [[99.99, 10]], [[100.0, 10]])])
+    closed = close_later(opened["cost_json"], [_book(exit_at, "exit-book", 100.99, 101.01, [[101.0, 10]], [[101.02, 10]])], datetime.fromisoformat(exit_at))
+    assert closed["cost_json"]["funding_source"] == "missing"
+    assert closed["cost_json"]["funding_usdt"] is None
+    assert closed["cost_json"]["outcome_bp"] is None
+    zero = dict(opened["cost_json"])
+    zero["funding_rates"] = [0.0, 0.0, 0.0]
+    priced = close_later(zero, [_book(exit_at, "exit-zero", 100.99, 101.01, [[101.0, 10]], [[101.02, 10]])], datetime.fromisoformat(exit_at))
+    assert priced["cost_json"]["funding_source"] == "venue_funding"
+    assert priced["cost_json"]["funding_usdt"] == 0.0
+    assert priced["cost_json"]["net_usdt"] == 0.8794
 
 
 def test_metrics_stay_insufficient_below_the_preregistered_minimum():

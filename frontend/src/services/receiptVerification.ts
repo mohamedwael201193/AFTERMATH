@@ -30,7 +30,7 @@ export const RECEIPT_VERIFICATION_LABELS: Record<
   UNCONFIRMED: {
     label: "Signature verified · anchor unconfirmed",
     tone: "neutral",
-    caption: "The receipt signature checked out. OpenTimestamps is still pending, so this is not a confirmed Bitcoin anchor.",
+    caption: "The receipt signature checked out. A missing or unconfirmed OpenTimestamps anchor is not a Bitcoin timestamp.",
   },
   SIGNATURE_VERIFIED: {
     label: "Signature verified",

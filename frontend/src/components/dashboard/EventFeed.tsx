@@ -22,10 +22,12 @@ export function EventFeed({
   events,
   limit,
   showFilters = true,
+  storedCount,
 }: {
   events: MarketEvent[];
   limit?: number;
   showFilters?: boolean;
+  storedCount?: number | null;
 }) {
   const search = useDashboardStore((s) => s.searchQuery);
   const selectEvent = useDashboardStore((s) => s.selectEvent);
@@ -63,7 +65,7 @@ export function EventFeed({
     <div className="grid grid-cols-1 gap-3">
       {showFilters && (
         <p className="text-xs font-semibold text-ink-soft">
-          {filtered.length} event{filtered.length === 1 ? "" : "s"} in the current window
+          {storedCount ?? filtered.length} stored book{(storedCount ?? filtered.length) === 1 ? "" : "s"}. This page shows {filtered.length}.
           {search && (
             <>
               {" "}matching “<span className="font-bold text-ink">{search}</span>”

@@ -17,7 +17,7 @@ type RangeFilter = "ALL" | "24H" | "48H";
 type SourceFilter = "ALL" | SourceKind;
 type VerificationFilter = "ALL" | "DIGEST" | "STRUCTURE";
 
-const OUTCOMES: OutcomeFilter[] = ["ALL", "PROCEED", "REDUCE", "WAIT", "REJECT", "NO ACTION"];
+const OUTCOMES: OutcomeFilter[] = ["ALL", "NO ACTION"];
 const RANGES: { value: RangeFilter; label: string }[] = [
   { value: "24H", label: "Last 24 h" },
   { value: "48H", label: "Last 48 h" },
@@ -121,11 +121,8 @@ export function HistoryPanel({ activity }: { activity: ActivityRecord[] }) {
             className="h-8 max-w-[9.5rem] rounded-full border-2 border-line-strong bg-warmwhite px-2.5 text-[11px] font-bold text-ink focus-visible:outline-forest"
           >
             <option value="ALL">All sources</option>
-            {Object.entries(SOURCE_KIND_LABELS).map(([k, v]) => (
-              <option key={k} value={k}>
-                {v}
-              </option>
-            ))}
+            <option value="EXCHANGE_FEED">Bitget public REST</option>
+            <option value="SEC_EDGAR">SEC EDGAR</option>
           </select>
         </label>
 
@@ -262,12 +259,13 @@ export function HistoryPanel({ activity }: { activity: ActivityRecord[] }) {
                         <span
                           className={cn(
                             "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide",
-                            a.riskOutcome === "APPROVED" && "border-forest bg-forest-mist text-forest-deep",
-                            a.riskOutcome === "REDUCED" && "border-ink bg-warn-soft text-warn",
-                            a.riskOutcome === "REFUSED" && "border-ink bg-risk-soft text-risk"
+                            a.governorCalled === false && "border-line-strong bg-paper text-ink-soft",
+                            a.governorCalled !== false && a.riskOutcome === "APPROVED" && "border-forest bg-forest-mist text-forest-deep",
+                            a.governorCalled !== false && a.riskOutcome === "REDUCED" && "border-ink bg-warn-soft text-warn",
+                            a.governorCalled !== false && a.riskOutcome === "REFUSED" && "border-ink bg-risk-soft text-risk"
                           )}
                         >
-                          {a.riskOutcome}
+                          {a.governorCalled === false ? "Not called" : a.riskOutcome}
                         </span>
                       </td>
                       <td className="whitespace-nowrap px-3 py-3 text-xs font-bold text-ink">
@@ -306,7 +304,7 @@ export function HistoryPanel({ activity }: { activity: ActivityRecord[] }) {
                     </p>
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-bold text-ink-soft">
                       <span className="rounded-full border border-line-strong bg-paper px-2 py-0.5">
-                        Risk: {a.riskOutcome}
+                        Risk: {a.governorCalled === false ? "Not called" : a.riskOutcome}
                       </span>
                       <span className="rounded-full border border-line-strong bg-paper px-2 py-0.5">
                         {a.execution === "FILLED" ? "paper fill" : a.execution === "REFUSED" ? "refused" : "no order"}

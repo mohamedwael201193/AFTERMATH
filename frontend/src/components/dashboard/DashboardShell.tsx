@@ -284,11 +284,11 @@ export function DashboardShell({ onExit }: { onExit: () => void }) {
                         Event feed
                       </h1>
                       <p className="mt-1 text-sm text-ink-soft">
-                        Headlines, filings, and gaps — each with its evidence bundle and
-                        decision state. Select one to open the full record.
+                        Stored books and filings — each row is one persisted record.
+                        Select one to open its evidence.
                       </p>
                     </div>
-                    <EventFeed events={events} />
+                    <EventFeed events={events} storedCount={cycle?.eventCount} />
                   </div>
                 )}
                 {tab === "decisions" && (

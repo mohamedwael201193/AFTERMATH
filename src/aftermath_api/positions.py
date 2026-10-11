@@ -9,7 +9,6 @@ from .execution_context import PAPER_EQUITY, derive_execution
 from .paper import paper_fill
 
 MIN_CLOSED = 30
-FALLBACK_FUNDING_8H = 0.0001
 PENDING_TTL = timedelta(hours=2)
 
 
@@ -153,10 +152,12 @@ def close_later(cost: dict, books: list[dict], now: datetime) -> dict:
         return {"error": "exit_unfilled"}
     closed_at = _parse(book.get("fetched_at_utc")) or now
     gross = int(cost["side"]) * qty * (float(exit_walk["walk"]["vwap"]) - float(entry["vwap"]))
-    funding, settlements = _funding(float(entry["filled_usdt"]), opened, closed_at)
+    funding, settlements, funding_source = _funding(
+        float(entry["filled_usdt"]), opened, closed_at, cost.get("funding_rates"),
+    )
     fees = float(entry["fee_usdt"]) + float(exit_walk["walk"]["fee_usdt"])
-    net = gross - fees - funding
     filled = float(entry["filled_usdt"])
+    net = None if funding is None else gross - fees - funding
     return {
         "status": "CLOSED",
         "cost_json": {
@@ -166,12 +167,12 @@ def close_later(cost: dict, books: list[dict], now: datetime) -> dict:
             "closed_at": book.get("fetched_at_utc"),
             "gross_usdt": round(gross, 6),
             "fees_usdt": round(fees, 6),
-            "funding_usdt": round(funding, 6),
+            "funding_usdt": None if funding is None else round(funding, 6),
             "funding_settlements": settlements,
-            "funding_source": "fallback_1bp_per_8h",
-            "net_usdt": round(net, 6),
-            "outcome_bp": round(net / filled * 1e4, 4) if filled else None,
-            "baselines": _baselines(cost, derived, opened, closed_at),
+            "funding_source": funding_source,
+            "net_usdt": None if net is None else round(net, 6),
+            "outcome_bp": None if net is None or not filled else round(net / filled * 1e4, 4),
+            "baselines": _baselines(cost, derived, opened, closed_at, cost.get("funding_rates")),
         },
     }
 
@@ -196,7 +197,7 @@ def paired_from_fills(fills: list[dict]) -> list[dict]:
     return pairs
 
 
-def _baselines(cost: dict, exit_derived: dict, opened: datetime, closed_at: datetime) -> dict:
+def _baselines(cost: dict, exit_derived: dict, opened: datetime, closed_at: datetime, rates=None) -> dict:
     no_trade = {"fixed_sign_bp": None, "llm_off_bp": 0.0, "random_bp": None, "no_trade_bp": 0.0}
     profile = _profile(cost.get("entry_profile"))
     exit_profile = exit_derived["profile"]
@@ -209,14 +210,20 @@ def _baselines(cost: dict, exit_derived: dict, opened: datetime, closed_at: date
         return no_trade
     if profile is None:
         return no_trade
-    fixed = _arm_bp(1, notional, entry_ref, profile, exit_derived["ref_price"], exit_profile, fee, opened, closed_at)
+    fixed = _arm_bp(1, notional, entry_ref, profile, exit_derived["ref_price"], exit_profile, fee, opened, closed_at, rates)
     seed = hashlib.sha256(f"{cost.get('symbol')}|{cost.get('opened_at')}".encode()).digest()
     random_side = 1 if seed[0] % 2 == 0 else -1
-    random_bp = _arm_bp(random_side, notional, entry_ref, profile, exit_derived["ref_price"], exit_profile, fee, opened, closed_at)
-    return {"fixed_sign_bp": fixed, "llm_off_bp": 0.0, "random_bp": random_bp, "no_trade_bp": 0.0}
+    random_bp = _arm_bp(random_side, notional, entry_ref, profile, exit_derived["ref_price"], exit_profile, fee, opened, closed_at, rates)
+    return {
+        "fixed_sign_bp": fixed,
+        "llm_off_bp": 0.0,
+        "llm_off_policy": "identical_to_no_trade",
+        "random_bp": random_bp,
+        "no_trade_bp": 0.0,
+    }
 
 
-def _arm_bp(side: int, notional: float, entry_ref: float, entry_profile: dict, exit_ref: float, exit_profile: dict, fee: float, opened: datetime, closed_at: datetime):
+def _arm_bp(side: int, notional: float, entry_ref: float, entry_profile: dict, exit_ref: float, exit_profile: dict, fee: float, opened: datetime, closed_at: datetime, rates=None):
     entry = paper_fill(side, notional, entry_ref, entry_profile, fee)
     if entry["status"] != "PAPER_FILLED":
         return None
@@ -225,7 +232,9 @@ def _arm_bp(side: int, notional: float, entry_ref: float, entry_profile: dict, e
     if exit_walk["status"] != "PAPER_FILLED":
         return None
     gross = side * qty * (float(exit_walk["walk"]["vwap"]) - float(entry["walk"]["vwap"]))
-    funding, _settlements = _funding(float(entry["walk"]["filled_usdt"]), opened, closed_at)
+    funding, _settlements, _source = _funding(float(entry["walk"]["filled_usdt"]), opened, closed_at, rates)
+    if funding is None:
+        return None
     net = gross - float(entry["walk"]["fee_usdt"]) - float(exit_walk["walk"]["fee_usdt"]) - funding
     filled = float(entry["walk"]["filled_usdt"])
     if filled <= 0:
@@ -303,9 +312,17 @@ def _later_book(books: list[dict], symbol: str, prior_hash: str | None, prior_ti
     return chosen
 
 
-def _funding(notional: float, start: datetime, end: datetime) -> tuple[float, int]:
-    settlements = int((end - start).total_seconds() // (8 * 3600))
-    return notional * FALLBACK_FUNDING_8H * max(settlements, 0), max(settlements, 0)
+def _funding(notional: float, start: datetime, end: datetime, rates=None) -> tuple[float | None, int, str]:
+    """Use venue prints, including a real zero. A missing series is not a 1 bp guess."""
+    settlements = max(int((end - start).total_seconds() // (8 * 3600)), 0)
+    if settlements == 0:
+        return 0.0, 0, "no_settlement"
+    if not isinstance(rates, list) or len(rates) < settlements:
+        return None, settlements, "missing"
+    used = rates[:settlements]
+    if any(isinstance(rate, bool) or not isinstance(rate, (int, float)) for rate in used):
+        return None, settlements, "missing"
+    return notional * sum(float(rate) for rate in used), settlements, "venue_funding"
 
 
 def _parse(value: str | None) -> datetime | None:

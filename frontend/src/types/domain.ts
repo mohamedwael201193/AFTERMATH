@@ -244,6 +244,8 @@ export interface ActivityRecord {
   occurredAt: string;
   sourceKind: SourceKind;
   receiptDigest: string | null;
+  /** False when the cycle stopped before the model and the governor. */
+  governorCalled?: boolean;
 }
 
 /* ── Price series ─────────────────────────────────────────────── */

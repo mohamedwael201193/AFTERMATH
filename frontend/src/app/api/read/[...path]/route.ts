@@ -5,7 +5,7 @@ const BASE = process.env.AFTERMATH_API_BASE || "https://aftermath-api.onrender.c
 function allowed(method: string, path: string): boolean {
   if (path.startsWith("/internal") || (path.startsWith("/v1/events") && method !== "GET")) return false;
   if (method === "POST" && path === "/v1/decisions") return false;
-  if (method === "GET" && ["/health", "/ready", "/v1/events", "/v1/paper/fills", "/v1/ops/status", "/v1/metrics"].includes(path)) {
+  if (method === "GET" && ["/health", "/ready", "/v1/events", "/v1/decisions", "/v1/paper/fills", "/v1/ops/status", "/v1/metrics"].includes(path)) {
     return true;
   }
   if (method === "GET" && /^\/v1\/(events|evidence|decisions|instruments|receipts)\/[^/]+$/.test(path)) return true;

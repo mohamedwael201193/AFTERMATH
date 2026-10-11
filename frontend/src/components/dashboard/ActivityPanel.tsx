@@ -20,6 +20,7 @@ export function ActivityPanel({ activity }: { activity: ActivityRecord[] }) {
 
   const fills = activity.filter((a) => a.execution === "FILLED");
   const refusals = activity.filter((a) => a.execution === "REFUSED");
+  const preModel = activity.filter((a) => a.governorCalled === false);
   const combinedCosts = useMemo(
     () => [
       { label: "Exchange fees", usd: 0 },
@@ -36,8 +37,9 @@ export function ActivityPanel({ activity }: { activity: ActivityRecord[] }) {
             The paper book — what actually happened
           </h3>
           <p className="mt-2 max-w-xl text-sm leading-relaxed text-ink-soft">
-            {fills.length} stored paper {fills.length === 1 ? "fill" : "fills"} and {refusals.length} recorded{" "}
-            {refusals.length === 1 ? "refusal" : "refusals"}. Zero fills are not a profit result. Costs stay
+            {fills.length} stored paper {fills.length === 1 ? "fill" : "fills"}, {refusals.length} risk{" "}
+            {refusals.length === 1 ? "refusal" : "refusals"}, and {preModel.length} pre-model{" "}
+            {preModel.length === 1 ? "cycle" : "cycles"}. A pre-model cycle is not a governor block. Zero fills are not a profit result. Costs stay
             INSUFFICIENT_DATA until a graded fill is stored.
           </p>
           <dl className="tnum mt-4 grid grid-cols-3 gap-3 text-center">

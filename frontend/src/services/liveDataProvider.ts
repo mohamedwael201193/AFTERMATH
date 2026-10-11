@@ -139,17 +139,38 @@ function cycleFromOps(ops: {
 
 function activityFromCycle(cycle: CycleSnapshot): ActivityRecord[] {
   if (!cycle.decisionId || !cycle.occurredAt) return [];
+  const preModel = cycle.reason === "no_qualifying_event";
   return [{
     eventId: cycle.decisionId,
     instrumentSymbol: "",
-    headline: `Paper cycle ${cycle.status || "recorded"}: ${cycle.reason || "no reason"}`,
+    headline: preModel ? `Pre-model cycle: ${cycle.reason}` : `Paper cycle: ${cycle.reason || "no reason"}`,
     decisionState: "NO ACTION",
     riskOutcome: cycle.status === "approved" ? "APPROVED" : "REFUSED",
-    execution: cycle.fillCount > 0 ? "FILLED" : cycle.reason === "no_qualifying_event" ? "NONE" : cycle.status === "refused" ? "REFUSED" : "NONE",
+    execution: "NONE",
     occurredAt: cycle.occurredAt,
     sourceKind: "EXCHANGE_FEED",
     receiptDigest: cycle.receiptId,
+    governorCalled: !preModel && cycle.reason !== "filing_document_missing" && cycle.reason !== "source_unavailable",
   }];
+}
+
+function activityFromDecisions(items: Record<string, unknown>[]): ActivityRecord[] {
+  return items.map((row) => {
+    const reason = String(row.reason || "no reason");
+    const modelCalled = row.model_called === true || row.decision_source === "model";
+    return {
+      eventId: String(row.id),
+      instrumentSymbol: "",
+      headline: modelCalled ? `Model decision: ${reason}` : `Pre-model cycle: ${reason}`,
+      decisionState: "NO ACTION" as const,
+      riskOutcome: "REFUSED" as const,
+      execution: "NONE" as const,
+      occurredAt: String(row.created_at_utc || ""),
+      sourceKind: "EXCHANGE_FEED" as const,
+      receiptDigest: row.receipt_id ? String(row.receipt_id) : null,
+      governorCalled: modelCalled,
+    };
+  });
 }
 
 export const liveDataProvider = {
@@ -186,21 +207,28 @@ export const liveDataProvider = {
 
   async getEventBundle(eventId: string): Promise<EventBundle | null> {
     if (eventId.startsWith("dec_")) {
-      const cycle = await this.getCycle();
-      const reason = cycle.reason || "no reason recorded";
+      const row = (await readJson(`/v1/decisions/${eventId}`)) as {
+        id?: string;
+        reason?: string;
+        created_at_utc?: string;
+        model_called?: boolean;
+        decision_source?: string;
+        receipt_id?: string | null;
+      };
+      const reason = row.reason || "no reason recorded";
+      const modelCalled = row.model_called === true || row.decision_source === "model";
       const event: MarketEvent = {
         id: eventId,
-        headline: `Paper cycle ${reason}`,
+        headline: modelCalled ? `Model decision ${reason}` : `Pre-model cycle ${reason}`,
         summary: "One scheduled paper cycle. It is not a separate decision for each symbol.",
         instrumentSymbol: null,
         category: "MARKET",
-        occurredAt: cycle.occurredAt || new Date().toISOString(),
+        occurredAt: row.created_at_utc || new Date().toISOString(),
         source: { id: "bitget-rest", name: "Bitget public REST", kind: "EXCHANGE_FEED", trust: "PRIMARY" },
         evidenceCompleteness: 0,
         decisionState: "NO ACTION",
         status: "RESOLVED",
       };
-      const modelCalled = reason === "model_no_action" || reason === "awaiting_next_book";
       const decision: AIDecision = {
         eventId,
         state: "NO ACTION",
@@ -209,15 +237,15 @@ export const liveDataProvider = {
           ? `${reason}. A model proposal was recorded and did not become a fill.`
           : `${reason}. The model was not asked to authorize a trade.`,
         modelCalled,
-        reasoning: [reason],
+        reasoning: modelCalled ? [reason] : ["MODEL NOT CALLED — PRE-MODEL REFUSAL", reason],
         invalidationConditions: ["A verified event and a usable order book are required before a proposal."],
         proposedAction: null,
       };
       const risk: RiskEngineResult = {
         eventId,
-        outcome: cycle.status === "approved" ? "APPROVED" : "REFUSED",
-        plainLanguage: reason,
-        checks: [{ id: "cycle", label: "Paper cycle", status: cycle.status === "approved" ? "PASS" : "FAIL", detail: reason, limit: "qualifying event and book", observed: reason }],
+        outcome: "REFUSED",
+        plainLanguage: modelCalled ? reason : "The governor was not called. This cycle has no risk verdict.",
+        checks: [],
         sizeMultiplier: null,
       };
       const execution: PaperExecution = {
@@ -243,9 +271,9 @@ export const liveDataProvider = {
         verification: "UNAVAILABLE",
         fieldsIncluded: [],
       };
-      if (cycle.receiptId) {
-        const stored = (await readJson(`/v1/receipts/${cycle.receiptId}`)) as { ots_status?: string; line?: { line_hash?: string } };
-        const verified = (await readJson(`/v1/receipts/${cycle.receiptId}/verify`, { method: "POST" })) as { verified?: boolean };
+      if (row.receipt_id) {
+        const stored = (await readJson(`/v1/receipts/${row.receipt_id}`)) as { ots_status?: string; line?: { line_hash?: string } };
+        const verified = (await readJson(`/v1/receipts/${row.receipt_id}/verify`, { method: "POST" })) as { verified?: boolean };
         receipt = {
           eventId,
           digestPreview: String(stored.line?.line_hash || "").slice(0, 16),
@@ -342,10 +370,11 @@ export const liveDataProvider = {
     activity: ActivityRecord[];
     cycle: CycleSnapshot;
   }> {
-    const [eventBody, ops, metrics] = await Promise.all([
+    const [eventBody, ops, metrics, decisionBody] = await Promise.all([
       readJson("/v1/events?limit=50") as Promise<{ items?: Record<string, unknown>[] }>,
       readJson("/v1/ops/status") as Promise<Parameters<typeof cycleFromOps>[0]>,
       readJson("/v1/metrics").catch(() => null) as Promise<{ status?: string; evaluation?: { status?: string } } | null>,
+      readJson("/v1/decisions?limit=50").catch(() => null) as Promise<{ items?: Record<string, unknown>[] } | null>,
     ]);
     const items = eventBody.items || [];
     const events = items.map(asEvent);
@@ -364,12 +393,14 @@ export const liveDataProvider = {
       events,
       observations,
       instruments: symbols.map(instrument),
-      activity: activityFromCycle(cycle),
+      activity: decisionBody?.items?.length ? activityFromDecisions(decisionBody.items) : activityFromCycle(cycle),
       cycle,
     };
   },
 
   async listActivity(): Promise<ActivityRecord[]> {
+    const body = (await readJson("/v1/decisions?limit=50").catch(() => null)) as { items?: Record<string, unknown>[] } | null;
+    if (body?.items?.length) return activityFromDecisions(body.items);
     return activityFromCycle(await this.getCycle());
   },
 
@@ -380,6 +411,9 @@ export const liveDataProvider = {
 
   async explainVerification(receipt: SignedReceipt): Promise<string> {
     if (receipt.verification === "UNCONFIRMED") {
+      if (receipt.timestampAuthority === "Not anchored") {
+        return "The production public key verified the signature. No OpenTimestamps anchor was submitted.";
+      }
       return "The production public key verified the signature. The OpenTimestamps anchor is still pending, so this is not a confirmed external timestamp.";
     }
     if (receipt.verification === "SIGNATURE_VERIFIED") {

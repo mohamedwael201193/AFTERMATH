@@ -182,7 +182,33 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
         row = store.get_decision(decision_id)
         if not row:
             raise ApiError("SCHEMA", "decision not found", 404)
-        return row
+        receipt = store.receipt_for_decision(row["id"])
+        return {
+            **row,
+            "model_called": row.get("decision_source") == "model",
+            "receipt_id": None if receipt is None else receipt["id"],
+        }
+
+    @app.get("/v1/decisions")
+    def decision_list(request: Request, limit: int = 50):
+        reader(request)
+        if limit < 1 or limit > 200:
+            raise ApiError("SCHEMA", "limit out of range", 422)
+        items = []
+        for row in store.list_decisions(limit=limit):
+            if not row:
+                continue
+            receipt = store.receipt_for_decision(row["id"])
+            items.append({
+                "id": row["id"],
+                "created_at_utc": row.get("created_at_utc"),
+                "status": row.get("status"),
+                "reason": row.get("reason"),
+                "decision_source": row.get("decision_source"),
+                "model_called": row.get("decision_source") == "model",
+                "receipt_id": None if receipt is None else receipt["id"],
+            })
+        return {"items": items}
 
     @app.get("/v1/paper/fills")
     def fills(request: Request):

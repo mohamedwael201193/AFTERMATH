@@ -8,9 +8,10 @@ The same-origin proxy is `frontend/src/app/api/read/[...path]/route.ts`. It hold
 - `GET /ready`
 - `GET /v1/events`
 - `GET /v1/events/{id}`
+- `GET /v1/decisions`
+- `GET /v1/decisions/{id}`
 - `GET /v1/instruments/{symbol}`
 - `GET /v1/evidence/{id}`
-- `GET /v1/decisions/{id}`
 - `GET /v1/paper/fills`
 - `GET /v1/receipts/{id}`
 - `POST /v1/receipts/{id}/verify`

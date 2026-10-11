@@ -248,6 +248,11 @@ export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
       {/* ── 5 · risk engine ────────────────────────────────── */}
       <section className="grid grid-cols-1 gap-3">
         <SectionTitle icon={ShieldCheck} step="05">What does the risk engine say?</SectionTitle>
+        {decision.modelCalled === false ? (
+          <p className="rounded-3xl border-2 border-forest bg-forest-mist px-5 py-4 text-sm leading-relaxed text-forest-deep">
+            The governor was not called. This is not a risk-engine block.
+          </p>
+        ) : (
         <div className="overflow-hidden rounded-3xl border-2 border-ink bg-warmwhite shadow-[0_4px_0_rgba(23,25,22,0.85)]">
           <div className="flex flex-wrap items-center gap-3 border-b-2 border-line bg-paper px-5 py-3.5">
             <RiskOutcomeBadge outcome={risk.outcome} />
@@ -288,6 +293,7 @@ export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
             ))}
           </ul>
         </div>
+        )}
       </section>
 
       {/* ── 6 · what happened next ─────────────────────────── */}

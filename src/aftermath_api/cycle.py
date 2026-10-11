@@ -142,7 +142,9 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", even
         def transport(url, headers):
             response = requests.get(url, headers=headers, timeout=20)
             response.raise_for_status()
-            return response.json()
+            if str(url).split("?", 1)[0].endswith(".json"):
+                return response.json()
+            return response.text
 
         try:
             filings = [row for row in fetch_filings(settings.sec_user_agent, transport, utc_now()) if not _already_seen(store, row)]

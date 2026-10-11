@@ -114,6 +114,10 @@ class MemoryStore:
     def count_decisions(self) -> int:
         return len(self.decisions)
 
+    def list_decisions(self, limit: int = 50) -> list[dict]:
+        rows = sorted(self.decisions.values(), key=lambda row: str(row.get("created_at_utc") or ""), reverse=True)
+        return [self.get_decision(row["id"]) for row in rows[:limit]]
+
     def count_events(self) -> int:
         return len(self.events)
 
@@ -385,6 +389,14 @@ class PostgresStore:
         with self._connect() as conn:
             row = conn.execute(f"SELECT COUNT(*) FROM {self.schema}.decisions").fetchone()
         return int(row[0])
+
+    def list_decisions(self, limit: int = 50) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT id FROM {self.schema}.decisions ORDER BY created_at_utc DESC LIMIT %s",
+                (limit,),
+            ).fetchall()
+        return [self.get_decision(row[0]) for row in rows]
 
     def count_events(self) -> int:
         with self._connect() as conn:
