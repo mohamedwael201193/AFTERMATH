@@ -40,6 +40,7 @@ def _pending(when: str, digest: str):
         "proposal_book_hash": digest,
         "proposal_fetched_at": when,
         "fee_rate": 0.0006,
+        "funding_interval_hours": 8,
     }
 
 
@@ -138,6 +139,29 @@ def test_a_book_before_the_horizon_is_a_mark_and_the_exit_waits():
     assert pair["notional_usdt"] == closed["cost_json"]["entry"]["filled_usdt"]
     too_early = close_later(marked["cost_json"], [mark_book, exit_book], datetime.fromisoformat(mark_at))
     assert too_early == {"error": "horizon_open"}
+
+
+def test_funding_uses_the_contract_interval_and_does_not_assume_eight_hours():
+    proposed = "2026-10-10T12:00:00+00:00"
+    opened_at = "2026-10-10T13:00:00+00:00"
+    exit_at = (datetime.fromisoformat(opened_at) + timedelta(hours=24, seconds=1)).isoformat()
+    book = _book(opened_at, "entry-book", 99.99, 100.01, [[99.99, 10]], [[100.0, 10]])
+    exit_book = _book(exit_at, "exit-book", 100.99, 101.01, [[101.0, 10]], [[101.02, 10]])
+    opened = enter_later(_pending(proposed, "proposal-book"), [book])
+    four = dict(opened["cost_json"])
+    four["funding_interval_hours"] = 4
+    four["funding_rates"] = [0.0001] * 6
+    closed = close_later(four, [exit_book], datetime.fromisoformat(exit_at))
+    assert closed["cost_json"]["funding_settlements"] == 6
+    assert closed["cost_json"]["funding_source"] == "venue_funding"
+    filled = float(opened["cost_json"]["entry"]["filled_usdt"])
+    assert closed["cost_json"]["funding_usdt"] == round(filled * 0.0006, 6)
+    missing = dict(four)
+    missing.pop("funding_interval_hours")
+    refused = close_later(missing, [exit_book], datetime.fromisoformat(exit_at))
+    assert refused["cost_json"]["funding_source"] == "missing_interval"
+    assert refused["cost_json"]["funding_usdt"] is None
+    assert refused["cost_json"]["outcome_bp"] is None
 
 
 def test_missing_funding_is_not_replaced_with_one_basis_point():
@@ -240,7 +264,7 @@ def test_closed_pnl_is_a_fraction_of_equity():
 
 def _market_for_govern(_symbol, _now):
     return {
-        "contract": {"status": "normal", "is_rwa": "YES", "taker_fee_rate": 0.0006},
+        "contract": {"status": "normal", "is_rwa": "YES", "taker_fee_rate": 0.0006, "funding_interval_hours": 8},
         "n_precedents": 4,
         "hedge_r2": 0.4,
         "hedge_beta": 0.9,

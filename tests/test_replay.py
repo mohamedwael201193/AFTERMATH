@@ -57,7 +57,7 @@ def _filing(now: datetime):
 
 def _market(**overrides):
     body = {
-        "contract": {"status": "normal", "is_rwa": "YES", "taker_fee_rate": 0.0006},
+        "contract": {"status": "normal", "is_rwa": "YES", "taker_fee_rate": 0.0006, "funding_interval_hours": 8},
         "n_precedents": 4,
         "hedge_r2": 0.4,
         "hedge_beta": 0.9,

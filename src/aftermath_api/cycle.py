@@ -227,6 +227,16 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", even
     }
 
 
+def _interval_field(context: dict) -> dict:
+    value = context.get("funding_interval_hours")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return {}
+    hours = float(value)
+    if hours != hours or hours < 1 or hours > 24:
+        return {}
+    return {"funding_interval_hours": hours}
+
+
 def _hf1_detail(settings, now: datetime, hf1_scan):
     """Record a separate H-HF-1 scan. It cannot change the S-A decision or call the model."""
     if hf1_scan is None and getattr(settings, "env", "") == "test":
@@ -418,5 +428,6 @@ def _hold_if_approved(result: dict, loaded: list[dict], rows, store, now, market
         "proposal_book_hash": derived["book_hash"],
         "proposal_fetched_at": derived["proposal_fetched_at"],
         "fee_rate": derived["fee_rate"],
+        **_interval_field(derived["context"]),
     }
     return result
