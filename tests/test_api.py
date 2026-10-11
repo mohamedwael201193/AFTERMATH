@@ -250,6 +250,41 @@ def test_unknown_route_uses_error_schema():
     assert set(missing.json()["error"]) == {"code", "message", "retryable"}
 
 
+def test_decision_list_returns_each_rows_receipt_without_calling_the_model():
+    store = MemoryStore()
+    http = client(store)
+    now = _now()
+    ingested = http.post(
+        "/v1/events",
+        headers={"Authorization": "Bearer decision-token"},
+        json={
+            "source": "bitget-rest",
+            "instrument_id": "NVDAUSDT",
+            "event_type": "ticker",
+            "event_time_utc": now,
+            "fetched_at_utc": now,
+            "payload": {"last": 100.0},
+            "mapping_confidence": 1.0,
+        },
+    )
+    created = http.post(
+        "/v1/decisions",
+        headers={"Authorization": "Bearer decision-token", "Idempotency-Key": "list-one"},
+        json={"evidence_ids": [ingested.json()["evidence"]["id"]]},
+    )
+    assert created.status_code == 200
+    decision = created.json()["decision"]
+    receipt = created.json()["receipt"]
+    listed = http.get("/v1/decisions?limit=5", headers={"Authorization": "Bearer reader-token"})
+    assert listed.status_code == 200
+    item = listed.json()["items"][0]
+    assert item["id"] == decision["id"]
+    assert item["model_called"] is False
+    assert item["reason"] == "llm_unconfigured"
+    assert item["receipt_id"] == (None if receipt is None else receipt["id"])
+    assert "evidence_ids" not in item
+
+
 def test_logs_redact_bearer(caplog):
     import logging
 

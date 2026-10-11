@@ -118,6 +118,21 @@ class MemoryStore:
         rows = sorted(self.decisions.values(), key=lambda row: str(row.get("created_at_utc") or ""), reverse=True)
         return [self.get_decision(row["id"]) for row in rows[:limit]]
 
+    def list_decision_headers(self, limit: int = 50) -> list[dict]:
+        headers = []
+        for row in self.list_decisions(limit):
+            receipt = self.receipt_for_decision(row["id"])
+            headers.append({
+                "id": row["id"],
+                "created_at_utc": row.get("created_at_utc"),
+                "status": row.get("status"),
+                "reason": row.get("reason"),
+                "decision_source": row.get("decision_source"),
+                "model_called": row.get("decision_source") == "model",
+                "receipt_id": None if receipt is None else receipt["id"],
+            })
+        return headers
+
     def count_events(self) -> int:
         return len(self.events)
 
@@ -167,6 +182,19 @@ class MemoryStore:
         if not self.runs:
             return None
         return sorted(self.runs.values(), key=lambda item: item["started_at_utc"])[-1]
+
+    def dashboard_counts(self) -> dict:
+        run = self.latest_run()
+        if run and run.get("decision_id"):
+            receipt = self.receipt_for_decision(run["decision_id"])
+            run = {**run, "receipt_id": None if receipt is None else receipt["id"]}
+        opened = [row for row in self.fills.values() if row.get("status") in ("PAPER_FILLED", "CLOSED")]
+        return {
+            "latest_run": run,
+            "fill_count": len(opened),
+            "decision_count": len(self.decisions),
+            "event_count": len(self.events),
+        }
 
     def run_for_key(self, key: str) -> dict | None:
         return self.runs.get(key)
@@ -398,6 +426,37 @@ class PostgresStore:
             ).fetchall()
         return [self.get_decision(row[0]) for row in rows]
 
+    def list_decision_headers(self, limit: int = 50) -> list[dict]:
+        """One round trip. The list page needs the receipt id, not the evidence join."""
+        sql = f"""
+        SELECT d.id, d.created_at_utc, d.status, d.reason, d.decision_source,
+               (
+                 SELECT r.id
+                 FROM {self.schema}.receipts r
+                 JOIN {self.schema}.ledger_lines l ON l.seq = r.ledger_seq
+                 WHERE l.body->>'decision_id' = d.id
+                 ORDER BY l.seq DESC
+                 LIMIT 1
+               ) AS receipt_id
+        FROM {self.schema}.decisions d
+        ORDER BY d.created_at_utc DESC
+        LIMIT %s
+        """
+        with self._connect() as conn:
+            rows = conn.execute(sql, (limit,)).fetchall()
+        return [
+            {
+                "id": row[0],
+                "created_at_utc": _iso(row[1]),
+                "status": row[2],
+                "reason": row[3],
+                "decision_source": row[4],
+                "model_called": row[4] == "model",
+                "receipt_id": row[5],
+            }
+            for row in rows
+        ]
+
     def count_events(self) -> int:
         with self._connect() as conn:
             row = conn.execute(f"SELECT COUNT(*) FROM {self.schema}.events").fetchone()
@@ -491,6 +550,37 @@ class PostgresStore:
                 f"SELECT id, idempotency_key, status, reason, decision_id, started_at_utc, finished_at_utc, detail FROM {self.schema}.paper_runs ORDER BY started_at_utc DESC LIMIT 1"
             ).fetchone()
         return _run_row(row) if row else None
+
+    def dashboard_counts(self) -> dict:
+        """Counts and the latest run in one database session."""
+        with self._connect() as conn:
+            decisions = conn.execute(f"SELECT COUNT(*) FROM {self.schema}.decisions").fetchone()[0]
+            events = conn.execute(f"SELECT COUNT(*) FROM {self.schema}.events").fetchone()[0]
+            fills = conn.execute(
+                f"SELECT COUNT(*) FROM {self.schema}.paper_fills WHERE status IN ('PAPER_FILLED', 'CLOSED')"
+            ).fetchone()[0]
+            run_row = conn.execute(
+                f"SELECT id, idempotency_key, status, reason, decision_id, started_at_utc, finished_at_utc, detail FROM {self.schema}.paper_runs ORDER BY started_at_utc DESC LIMIT 1"
+            ).fetchone()
+            receipt_id = None
+            if run_row and run_row[4]:
+                receipt = conn.execute(
+                    f"""SELECT r.id FROM {self.schema}.receipts r
+                        JOIN {self.schema}.ledger_lines l ON l.seq = r.ledger_seq
+                        WHERE l.body->>'decision_id' = %s
+                        ORDER BY l.seq DESC LIMIT 1""",
+                    (run_row[4],),
+                ).fetchone()
+                receipt_id = receipt[0] if receipt else None
+        run = _run_row(run_row) if run_row else None
+        if run is not None:
+            run = {**run, "receipt_id": receipt_id}
+        return {
+            "latest_run": run,
+            "fill_count": int(fills),
+            "decision_count": int(decisions),
+            "event_count": int(events),
+        }
 
     def run_for_key(self, key: str) -> dict | None:
         with self._connect() as conn:

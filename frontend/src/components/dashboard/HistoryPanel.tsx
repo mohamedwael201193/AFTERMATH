@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 type OutcomeFilter = "ALL" | DecisionState;
 type RangeFilter = "ALL" | "24H" | "48H";
 type SourceFilter = "ALL" | SourceKind;
-type VerificationFilter = "ALL" | "DIGEST" | "STRUCTURE";
+type VerificationFilter = "ALL" | "DIGEST" | "NO_DIGEST";
 
 const OUTCOMES: OutcomeFilter[] = ["ALL", "NO ACTION"];
 const RANGES: { value: RangeFilter; label: string }[] = [
@@ -47,14 +47,14 @@ export function HistoryPanel({ activity }: { activity: ActivityRecord[] }) {
       if (outcome !== "ALL" && a.decisionState !== outcome) return false;
       if (source !== "ALL" && a.sourceKind !== source) return false;
       if (verification === "DIGEST" && !a.receiptDigest) return false;
-      if (verification === "STRUCTURE" && !a.receiptDigest) return false;
+      if (verification === "NO_DIGEST" && a.receiptDigest) return false;
       if (range !== "ALL") {
         const hours = range === "24H" ? 24 : 48;
         const ageH = (Date.now() - Date.parse(a.occurredAt)) / 3600000;
         if (ageH > hours) return false;
       }
       if (search) {
-        const haystack = `${a.eventId} ${a.headline} ${a.instrumentSymbol}`.toLowerCase();
+        const haystack = `${a.eventId} ${a.headline} ${a.instrumentSymbol} ${a.receiptDigest ?? ""}`.toLowerCase();
         if (!haystack.includes(search)) return false;
       }
       return true;
@@ -134,8 +134,8 @@ export function HistoryPanel({ activity }: { activity: ActivityRecord[] }) {
             className="h-8 rounded-full border-2 border-line-strong bg-warmwhite px-2.5 text-[11px] font-bold text-ink focus-visible:outline-forest"
           >
             <option value="ALL">Any</option>
-            <option value="DIGEST">Has digest</option>
-            <option value="STRUCTURE">Structure verified</option>
+            <option value="DIGEST">Has receipt digest</option>
+            <option value="NO_DIGEST">No receipt digest</option>
           </select>
         </label>
 

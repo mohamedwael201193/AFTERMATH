@@ -32,7 +32,13 @@ const NAV: Array<{ id: DashboardTab; label: string; icon: React.ElementType; hin
   { id: "activity", label: "Activity", icon: ReceiptText, hint: "Paper ledger" },
 ];
 
-function MarketStatusChips() {
+function MarketStatusChips({ cycle }: { cycle: ReturnType<typeof useDashboardData>["cycle"] }) {
+  const scheduler = cycle?.scheduler ?? "unknown";
+  const schedule = cycle?.schedule ?? null;
+  const sec = cycle?.secEdgarStatus ?? "unknown";
+  const modelCalls = cycle?.modelCallsLatest;
+  const kill = cycle?.killSwitch === true;
+
   return (
     <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
       <span className="inline-flex items-center gap-1.5 rounded-full border-2 border-ink bg-warn-soft px-2.5 py-1 text-warn">
@@ -47,7 +53,27 @@ function MarketStatusChips() {
           <span className="absolute inline-flex h-full w-full animate-pulse-ring rounded-full bg-forest" />
           <span className="relative inline-flex h-2 w-2 rounded-full bg-forest" />
         </span>
-        Hourly cycle · not continuous
+        {cycle?.continuousOperation ? "Continuous" : "Hourly cycle · not continuous"}
+        {schedule ? (
+          <span className="hidden font-semibold text-ink-soft sm:inline">· {schedule}</span>
+        ) : null}
+      </span>
+      <span className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft">
+        Scheduler · {scheduler}
+      </span>
+      <span className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft">
+        SEC · {sec}
+      </span>
+      <span className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft">
+        Last cycle model calls · {modelCalls == null ? "n/a" : modelCalls}
+      </span>
+      <span
+        className={cn(
+          "rounded-full border-2 px-2.5 py-1 font-bold uppercase tracking-wide",
+          kill ? "border-ink bg-risk-soft text-risk" : "border-forest bg-forest-mist text-forest-deep"
+        )}
+      >
+        Kill switch · {kill ? "on" : "off"}
       </span>
       <span className="hidden rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft md:inline">
         Production API · paper only
@@ -56,7 +82,13 @@ function MarketStatusChips() {
   );
 }
 
-function SidebarNav({ onExit }: { onExit: () => void }) {
+function SidebarNav({
+  onExit,
+  cycle,
+}: {
+  onExit: () => void;
+  cycle: ReturnType<typeof useDashboardData>["cycle"];
+}) {
   const tab = useDashboardStore((s) => s.tab);
   const setTab = useDashboardStore((s) => s.setTab);
 
@@ -100,7 +132,7 @@ function SidebarNav({ onExit }: { onExit: () => void }) {
       </nav>
 
       <div className="mt-auto grid gap-3 px-5 pb-5">
-        <MarketStatusChips />
+        <MarketStatusChips cycle={cycle} />
         <div className="flex items-center justify-between">
           <Button
             variant="outline"
@@ -155,7 +187,13 @@ function DetailPanelContent({ onClose }: { onClose: () => void }) {
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center justify-between gap-3 border-b-2 border-line bg-paper px-5 py-3.5">
         <p className="text-xs font-bold uppercase tracking-[0.14em] text-ink-soft">
-          Decision record
+          {bundle
+            ? bundle.observation && !bundle.event.id.startsWith("dec_")
+              ? "Observation Details"
+              : "Decision record"
+            : selectedEventId.startsWith("dec_")
+              ? "Decision record"
+              : "Observation Details"}
         </p>
         <button
           onClick={onClose}
@@ -204,7 +242,7 @@ export function DashboardShell({ onExit }: { onExit: () => void }) {
     <div className="flex min-h-[calc(100vh-1rem)] flex-col lg:min-h-0 lg:flex-row lg:items-stretch">
       {/* desktop sidebar */}
       <aside className="sticky top-0 hidden h-auto w-[248px] shrink-0 flex-col border-r-2 border-line bg-paper lg:flex">
-        <SidebarNav onExit={onExit} />
+        <SidebarNav onExit={onExit} cycle={cycle} />
       </aside>
 
       {/* main column */}
@@ -237,14 +275,14 @@ export function DashboardShell({ onExit }: { onExit: () => void }) {
               />
             </div>
             <div className="hidden min-w-0 lg:block">
-              <MarketStatusChips />
+              <MarketStatusChips cycle={cycle} />
             </div>
             <div className="ml-auto shrink-0 lg:hidden">
               <SettingsDialog />
             </div>
           </div>
           <div className="mt-2.5 lg:hidden">
-            <MarketStatusChips />
+            <MarketStatusChips cycle={cycle} />
           </div>
         </header>
 
@@ -383,7 +421,9 @@ export function DashboardShell({ onExit }: { onExit: () => void }) {
             className="w-full border-l-2 border-ink bg-warmwhite p-0 sm:max-w-md xl:hidden [&>button]:hidden"
           >
             <SheetHeader className="sr-only">
-              <SheetTitle>Decision record</SheetTitle>
+              <SheetTitle>
+              {selectedEventId?.startsWith("dec_") ? "Decision record" : "Observation Details"}
+            </SheetTitle>
             </SheetHeader>
             <DetailPanelContent onClose={closePanel} />
           </SheetContent>

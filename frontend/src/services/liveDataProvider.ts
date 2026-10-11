@@ -24,6 +24,12 @@ export interface CycleSnapshot {
   stale: boolean;
   evaluationStatus: string | null;
   eventCount: number | null;
+  scheduler: string | null;
+  schedule: string | null;
+  continuousOperation: boolean;
+  killSwitch: boolean;
+  secEdgarStatus: string | null;
+  modelCallsLatest: number | null;
 }
 
 const NAMES: Record<string, string> = {
@@ -70,10 +76,36 @@ function asEvent(row: Record<string, unknown>): MarketEvent {
     category: "MARKET",
     occurredAt: String(row.fetched_at_utc || row.event_time_utc),
     source: { id: "bitget-rest", name: "Bitget public REST", kind: "EXCHANGE_FEED", trust: "PRIMARY" },
-    evidenceCompleteness: 0,
+    evidenceCompleteness: null,
     decisionState: "NO ACTION",
     status: "NEW",
   };
+}
+
+function isPreModelDecision(row: Record<string, unknown>): boolean {
+  return row.model_called !== true && row.decision_source !== "model";
+}
+
+function mapActivityExecution(row: Record<string, unknown>, preModel: boolean): ActivityRecord["execution"] {
+  const status = String(row.status || "").toUpperCase();
+  if (status.includes("FILL") || status === "PAPER_FILLED" || status === "CLOSED") return "FILLED";
+  if (preModel) return "NONE";
+  if (status === "ABSTAIN" || status === "REFUSED" || status === "REJECT") return "REFUSED";
+  return "NONE";
+}
+
+function mapActivityRisk(row: Record<string, unknown>, preModel: boolean): ActivityRecord["riskOutcome"] {
+  if (preModel) return "APPROVED";
+  const status = String(row.status || "").toUpperCase();
+  if (status === "APPROVED" || status === "PAPER_PROPOSED" || status === "NO_ACTION") return "APPROVED";
+  if (status.includes("REDUC")) return "REDUCED";
+  return "REFUSED";
+}
+
+function receiptDigestPreview(receiptId: unknown): string | null {
+  if (!receiptId) return null;
+  const id = String(receiptId);
+  return id.length > 16 ? id.slice(0, 16) : id;
 }
 
 function asObservation(row: Record<string, unknown>): MarketObservation | null {
@@ -115,13 +147,27 @@ function anchorUnconfirmed(status?: string): boolean {
 }
 
 function cycleFromOps(ops: {
-  latest_run?: { status?: string; reason?: string; decision_id?: string; receipt_id?: string; finished_at_utc?: string; started_at_utc?: string };
+  latest_run?: {
+    status?: string;
+    reason?: string;
+    decision_id?: string;
+    receipt_id?: string;
+    finished_at_utc?: string;
+    started_at_utc?: string;
+    detail?: { model_calls?: number };
+  };
   fill_count?: number;
   decision_count?: number;
   event_count?: number;
   stale?: boolean;
+  scheduler?: string;
+  schedule?: string;
+  continuous_operation?: boolean;
+  kill_switch?: boolean;
+  sources?: { sec_edgar?: { status?: string } };
 }): CycleSnapshot {
   const latest = ops.latest_run;
+  const detail = latest?.detail;
   return {
     decisionCount: typeof ops.decision_count === "number" ? ops.decision_count : latest?.decision_id ? 1 : 0,
     refusalCount: latest?.status === "refused" ? 1 : 0,
@@ -134,23 +180,33 @@ function cycleFromOps(ops: {
     stale: ops.stale === true,
     evaluationStatus: null,
     eventCount: typeof ops.event_count === "number" ? ops.event_count : null,
+    scheduler: ops.scheduler ?? null,
+    schedule: ops.schedule ?? null,
+    continuousOperation: ops.continuous_operation === true,
+    killSwitch: ops.kill_switch === true,
+    secEdgarStatus: ops.sources?.sec_edgar?.status ?? null,
+    modelCallsLatest: typeof detail?.model_calls === "number" ? detail.model_calls : null,
   };
 }
 
 function activityFromCycle(cycle: CycleSnapshot): ActivityRecord[] {
   if (!cycle.decisionId || !cycle.occurredAt) return [];
-  const preModel = cycle.reason === "no_qualifying_event";
+  const preModel =
+    cycle.reason === "no_qualifying_event" ||
+    cycle.reason === "scheduled_no_new_evidence" ||
+    cycle.reason === "source_unavailable" ||
+    cycle.reason === "filing_document_missing";
   return [{
     eventId: cycle.decisionId,
     instrumentSymbol: "",
     headline: preModel ? `Pre-model cycle: ${cycle.reason}` : `Paper cycle: ${cycle.reason || "no reason"}`,
     decisionState: "NO ACTION",
-    riskOutcome: cycle.status === "approved" ? "APPROVED" : "REFUSED",
+    riskOutcome: preModel ? "APPROVED" : cycle.status === "approved" ? "APPROVED" : "REFUSED",
     execution: "NONE",
     occurredAt: cycle.occurredAt,
     sourceKind: "EXCHANGE_FEED",
-    receiptDigest: cycle.receiptId,
-    governorCalled: !preModel && cycle.reason !== "filing_document_missing" && cycle.reason !== "source_unavailable",
+    receiptDigest: receiptDigestPreview(cycle.receiptId),
+    governorCalled: !preModel,
   }];
 }
 
@@ -158,16 +214,17 @@ function activityFromDecisions(items: Record<string, unknown>[]): ActivityRecord
   return items.map((row) => {
     const reason = String(row.reason || "no reason");
     const modelCalled = row.model_called === true || row.decision_source === "model";
+    const preModel = isPreModelDecision(row);
     return {
       eventId: String(row.id),
       instrumentSymbol: "",
       headline: modelCalled ? `Model decision: ${reason}` : `Pre-model cycle: ${reason}`,
       decisionState: "NO ACTION" as const,
-      riskOutcome: "REFUSED" as const,
-      execution: "NONE" as const,
+      riskOutcome: mapActivityRisk(row, preModel),
+      execution: mapActivityExecution(row, preModel),
       occurredAt: String(row.created_at_utc || ""),
       sourceKind: "EXCHANGE_FEED" as const,
-      receiptDigest: row.receipt_id ? String(row.receipt_id) : null,
+      receiptDigest: receiptDigestPreview(row.receipt_id),
       governorCalled: modelCalled,
     };
   });
@@ -225,7 +282,7 @@ export const liveDataProvider = {
         category: "MARKET",
         occurredAt: row.created_at_utc || new Date().toISOString(),
         source: { id: "bitget-rest", name: "Bitget public REST", kind: "EXCHANGE_FEED", trust: "PRIMARY" },
-        evidenceCompleteness: 0,
+        evidenceCompleteness: null,
         decisionState: "NO ACTION",
         status: "RESOLVED",
       };
@@ -243,7 +300,7 @@ export const liveDataProvider = {
       };
       const risk: RiskEngineResult = {
         eventId,
-        outcome: "REFUSED",
+        outcome: modelCalled ? "REFUSED" : "APPROVED",
         plainLanguage: modelCalled ? reason : "The governor was not called. This cycle has no risk verdict.",
         checks: [],
         sizeMultiplier: null,
@@ -317,7 +374,7 @@ export const liveDataProvider = {
     };
     const risk: RiskEngineResult = {
       eventId,
-      outcome: "REFUSED",
+      outcome: "APPROVED",
       plainLanguage: "The governor was not called for this observation.",
       checks: [],
       sizeMultiplier: null,
@@ -389,11 +446,14 @@ export const liveDataProvider = {
     const symbols = [...new Set(events.map((event) => event.instrumentSymbol).filter(Boolean))] as string[];
     const cycle = cycleFromOps(ops);
     cycle.evaluationStatus = metrics?.evaluation?.status || metrics?.status || null;
+    const activity = decisionBody?.items?.length ? activityFromDecisions(decisionBody.items) : activityFromCycle(cycle);
+    const riskRefusals = activity.filter((a) => a.governorCalled !== false && a.riskOutcome === "REFUSED").length;
+    cycle.refusalCount = riskRefusals;
     return {
       events,
       observations,
       instruments: symbols.map(instrument),
-      activity: decisionBody?.items?.length ? activityFromDecisions(decisionBody.items) : activityFromCycle(cycle),
+      activity,
       cycle,
     };
   },

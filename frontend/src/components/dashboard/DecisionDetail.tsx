@@ -51,6 +51,7 @@ function SectionTitle({
 export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
   const detailedRisk = useDashboardStore((s) => s.settings.detailedRisk);
   const { event, instrument, observation, evidence, decision, risk, execution, receipt, priceSeries } = bundle;
+  const isBookObservation = !!observation && !event.id.startsWith("dec_");
 
   const concerns = useMemo(() => {
     const list: Array<{ tone: "warn" | "risk"; text: string }> = [];
@@ -93,7 +94,13 @@ export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
               {instrument?.name ?? "No instrument"} · {event.source.name}
             </p>
           </div>
-          <DecisionBadge state={decision.state} size="lg" className="ml-auto" />
+          {isBookObservation ? (
+            <span className="ml-auto shrink-0 rounded-full border border-line-strong bg-paper px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-ink-soft">
+              Observation
+            </span>
+          ) : (
+            <DecisionBadge state={decision.state} size="lg" className="ml-auto" />
+          )}
         </div>
 
         {observation && (
@@ -138,12 +145,26 @@ export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
       {/* ── 3 · the decision ───────────────────────────────── */}
       <section className="grid grid-cols-1 gap-3">
         <SectionTitle icon={BrainCircuit} step="03">
-          {decision.modelCalled === false ? "MODEL NOT CALLED — PRE-MODEL REFUSAL" : "What did the AI decide?"}
+          {isBookObservation
+            ? "Not an AI decision"
+            : decision.modelCalled === false
+              ? "MODEL NOT CALLED — PRE-MODEL REFUSAL"
+              : "What did the AI decide?"}
         </SectionTitle>
         <div className="overflow-hidden rounded-3xl border-2 border-ink bg-warmwhite shadow-[0_4px_0_rgba(23,25,22,0.85)]">
           <div className="flex flex-wrap items-center gap-4 border-b-2 border-line bg-paper px-5 py-4">
-            <DecisionBadge state={decision.state} size="lg" />
-            {decision.modelCalled === false ? (
+            {isBookObservation ? (
+              <span className="rounded-full border-2 border-line-strong bg-paper px-3 py-1.5 text-xs font-bold uppercase tracking-wide text-ink-soft">
+                Book observation only
+              </span>
+            ) : (
+              <DecisionBadge state={decision.state} size="lg" />
+            )}
+            {isBookObservation ? (
+              <p className="text-sm font-semibold text-ink-soft">
+                This row is a stored Bitget book snapshot. The model and the governor were not called for this symbol.
+              </p>
+            ) : decision.modelCalled === false ? (
               <p className="text-sm font-semibold text-ink-soft">No model confidence — the model was not called.</p>
             ) : (
             <div className="min-w-[160px] flex-1">
@@ -248,9 +269,11 @@ export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
       {/* ── 5 · risk engine ────────────────────────────────── */}
       <section className="grid grid-cols-1 gap-3">
         <SectionTitle icon={ShieldCheck} step="05">What does the risk engine say?</SectionTitle>
-        {decision.modelCalled === false ? (
-          <p className="rounded-3xl border-2 border-forest bg-forest-mist px-5 py-4 text-sm leading-relaxed text-forest-deep">
-            The governor was not called. This is not a risk-engine block.
+        {decision.modelCalled === false || isBookObservation ? (
+          <p className="rounded-3xl border-2 border-line-strong bg-paper px-5 py-4 text-sm leading-relaxed text-ink">
+            {isBookObservation
+              ? "This observation has no risk verdict. It is not a governor block."
+              : "The governor was not called. This is not a risk-engine block."}
           </p>
         ) : (
         <div className="overflow-hidden rounded-3xl border-2 border-ink bg-warmwhite shadow-[0_4px_0_rgba(23,25,22,0.85)]">
@@ -343,7 +366,11 @@ export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
                   {execution.kind === "REFUSAL" ? "Refused" : "No order"}
                 </p>
                 <p className="mt-1 text-sm font-semibold text-ink-soft">
-                  {execution.kind === "REFUSAL" ? "The risk engine blocked execution." : "Nothing to execute."}
+                  {execution.kind === "REFUSAL"
+                    ? "The risk engine blocked execution."
+                    : isBookObservation
+                      ? "No order was sent. This book row is not a trade or a fill."
+                      : "Nothing to execute."}
                 </p>
               </>
             )}
@@ -387,7 +414,10 @@ export function DecisionDetail({ bundle }: { bundle: EventBundle }) {
       {/* ── 7 · verification ───────────────────────────────── */}
       <section className="grid grid-cols-1 gap-3">
         <SectionTitle icon={Stamp} step="07">Can the result be verified?</SectionTitle>
-        <ReceiptCard receipt={receipt} />
+        <ReceiptCard
+          receipt={receipt}
+          heading={isBookObservation ? "Receipt" : "Decision receipt"}
+        />
         <p className="text-xs text-ink-soft">
           {DECISION_META[decision.state].plain}
         </p>

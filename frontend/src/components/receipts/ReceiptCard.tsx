@@ -14,7 +14,13 @@ import { toast } from "@/hooks/use-toast";
  * distinguishes a simulated receipt from a cryptographic verification —
  * the explanation text comes from the provider boundary.
  */
-export function ReceiptCard({ receipt }: { receipt: SignedReceipt }) {
+export function ReceiptCard({
+  receipt,
+  heading = "Decision receipt",
+}: {
+  receipt: SignedReceipt;
+  heading?: string;
+}) {
   const [copied, setCopied] = useState(false);
   const [explanation, setExplanation] = useState<string | null>(null);
   const meta = RECEIPT_VERIFICATION_LABELS[receipt.verification];
@@ -52,7 +58,7 @@ export function ReceiptCard({ receipt }: { receipt: SignedReceipt }) {
       <div className="flex flex-wrap items-center gap-3 border-b-2 border-dashed border-line-strong bg-paper px-5 py-3">
         <Fingerprint className="h-5 w-5 text-forest" aria-hidden="true" />
         <h4 className="text-sm font-bold uppercase tracking-wide text-ink">
-          Decision receipt
+          {heading}
         </h4>
         <span
           className={cn(

@@ -10,6 +10,8 @@ MIN_NONZERO = 15
 BOOTSTRAP_DRAWS = 2000
 BOOTSTRAP_SEED = 20261011
 ARMS = ("agent", "fixed_sign", "llm_off", "random", "no_trade")
+BASELINES = ("fixed_sign", "llm_off", "random", "no_trade")
+COST_KEYS = ("fees_bp", "funding_bp", "slippage_bp")
 
 
 def evaluate(pairs: list[dict]) -> dict:
@@ -30,16 +32,44 @@ def evaluate(pairs: list[dict]) -> dict:
     }
     if len(rows) < MIN_PAIRS or len(nonzero) < MIN_NONZERO:
         return report
+    agent_values = [_num(row, "agent_bp") for row in rows]
     report["status"] = "OBSERVED"
     report["arms"] = {name: _arm([_num(row, f"{name}_bp") for row in rows]) for name in ARMS}
+    agent = report["arms"]["agent"]
+    report["net_return_bp"] = round(sum(agent_values), 4)
+    report["win_rate"] = agent["win_rate"]
+    report["sharpe"] = agent["sharpe"]
+    report["paired_comparisons"] = {
+        baseline: _paired_comparison(rows, baseline) for baseline in BASELINES
+    }
     differences = [_num(row, "agent_bp") - _num(row, "fixed_sign_bp") for row in rows]
-    report["paired_agent_minus_fixed_bp"] = {
+    report["paired_agent_minus_fixed_bp"] = report["paired_comparisons"]["fixed_sign"]
+    report["max_drawdown_bp"] = _drawdown(agent_values)
+    costs = _cost_summary(rows)
+    if costs is not None:
+        report["costs"] = costs
+    violations = sum(1 for row in rows if row.get("risk_control_violation") is True)
+    report["risk_control_violation_rate"] = round(violations / len(rows), 4)
+    report["note"] = "Observed paper comparison on the registered window. This is not a profitability claim."
+    return report
+
+
+def _paired_comparison(rows: list[dict], baseline: str) -> dict:
+    differences = [_num(row, "agent_bp") - _num(row, f"{baseline}_bp") for row in rows]
+    return {
         "mean": round(statistics.fmean(differences), 4),
         "bootstrap_95": _bootstrap(differences),
     }
-    report["max_drawdown_bp"] = _drawdown([_num(row, "agent_bp") for row in rows])
-    report["note"] = "Observed paper comparison on the registered window. This is not a profitability claim."
-    return report
+
+
+def _cost_summary(rows: list[dict]) -> dict | None:
+    if not all(all(key in row for key in COST_KEYS) for row in rows):
+        return None
+    return {
+        "fees_bp_mean": round(statistics.fmean(_num(row, "fees_bp") for row in rows), 4),
+        "funding_bp_mean": round(statistics.fmean(_num(row, "funding_bp") for row in rows), 4),
+        "slippage_bp_mean": round(statistics.fmean(_num(row, "slippage_bp") for row in rows), 4),
+    }
 
 
 def _arm(values: list[float]) -> dict:

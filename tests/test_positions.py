@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+from aftermath_api.config import Settings
 from aftermath_api.cycle import run_paper_cycle
 from aftermath_api.metrics import evaluate
 from aftermath_api.positions import close_later, enter_later, paired_from_fills, portfolio_state, summarize
@@ -177,3 +178,154 @@ def test_closed_pnl_is_a_fraction_of_equity():
     assert state["day_pnl"] == -0.01
     assert state["drawdown"] == -0.01
     assert state["symbol_pnl_by_symbol"]["NVDAUSDT"] == -0.01
+
+
+def _market_for_govern(_symbol, _now):
+    return {
+        "contract": {"status": "normal", "is_rwa": "YES", "taker_fee_rate": 0.0006},
+        "n_precedents": 4,
+        "hedge_r2": 0.4,
+        "hedge_beta": 0.9,
+    }
+
+
+def _cycle_settings(signing_key_path: str):
+    return Settings(
+        env="test",
+        database_url="",
+        direct_url="",
+        llm_api_key="x",
+        llm_base_url="https://example.test/v1",
+        llm_model="m",
+        llm_configured=True,
+        reader_token="r",
+        decision_token="d",
+        job_token="j",
+        signing_key_path=signing_key_path,
+        sec_user_agent="",
+        web_origin="",
+        decisions="model",
+    )
+
+
+def test_isolated_lifecycle_approve_pending_fill_close_receipt_and_tamper(tmp_path):
+    """In-memory isolated store (no production Postgres): governor approve, pending entry,
+    later-book fill, horizon close with explicit venue funding, signed receipt, tamper fail."""
+    import json as jsonlib
+
+    from aftermath_api.paper import govern
+    from aftermath_api.positions import advance_positions, lifecycle_intact
+    from aftermath_api.receipts import chain_intact, generate_production_key, verify_line
+
+    production_ledger = MemoryStore()
+    store = MemoryStore()
+    private = tmp_path / "production_ed25519.key"
+    public = tmp_path / "production_ed25519.pub"
+    generate_production_key(private, public)
+
+    clock = datetime.now(timezone.utc)
+    proposed = (clock - timedelta(seconds=30)).isoformat()
+    opened_at = clock.isoformat()
+    exit_at = (clock + timedelta(hours=24, seconds=1)).isoformat()
+    proposal_book = _book(proposed, "proposal-book", 99.99, 100.01, [[99.99, 10]], [[100.0, 10]])
+    entry_book = _book(opened_at, "entry-book", 99.99, 100.01, [[99.99, 10]], [[100.0, 10]])
+    exit_book = _book(exit_at, "exit-book", 100.99, 101.01, [[101.0, 10]], [[101.02, 10]])
+    filing = {
+        "source": "sec-edgar",
+        "instrument_id": "NVDAUSDT",
+        "event_type": "filing",
+        "event_time_utc": proposed,
+        "fetched_at_utc": proposed,
+        "payload": {
+            "form": "8-K",
+            "items": "2.02",
+            "qualifies": True,
+            "accession": "proof-isolated-lifecycle-2.02",
+            "document_sha256": "d" * 64,
+            "excerpt": "Item 2.02 results of operations.",
+            "excerpt_untrusted": True,
+        },
+        "mapping_confidence": 1.0,
+    }
+
+    def transport(_url, json=None, headers=None, timeout=None):
+        cited = jsonlib.loads(json["messages"][1]["content"])["evidence"][0]["id"]
+        body = {
+            "action": "LONG",
+            "symbol": "NVDAUSDT",
+            "size_frac": 0.05,
+            "confidence": 0.8,
+            "horizon_hours": 24,
+            "thesis": "The filing supports a paper long.",
+            "invalidation": "A later book that removes the residual ends the idea.",
+            "cited_evidence_ids": [cited],
+            "text": "no numeric claim",
+        }
+
+        class Ok:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"choices": [{"message": {"content": jsonlib.dumps(body)}}]}
+
+        return Ok()
+
+    settings = _cycle_settings(str(private))
+    approved = run_paper_cycle(
+        settings,
+        store,
+        fetch=lambda: ([proposal_book], []),
+        event_fetch=lambda: [filing],
+        signing_path=str(private),
+        model_transport=transport,
+        market_fetch=_market_for_govern,
+    )
+    assert approved["reason"] == "awaiting_next_book"
+    assert approved["receipt_id"]
+    assert production_ledger.ledger == []
+
+    fill_key = approved["idempotency_key"] + ":entry"
+    pending = store.fill_for_key(fill_key)
+    assert pending["status"] == "PENDING_ENTRY"
+    assert lifecycle_intact(store, pending["id"])
+    assert all(row.get("source") != "fixture" for row in store.events.values())
+
+    decision = store.get_decision(approved["decision_id"])
+    events = [store.get_evidence(eid)["event"] for eid in decision["evidence_ids"]]
+    from aftermath_api.execution_context import derive_execution
+
+    derived = derive_execution(
+        {"action": "LONG", "symbol": "NVDAUSDT", "size_frac": 0.05, "horizon_hours": 24},
+        events,
+        "model",
+        market=_market_for_govern("NVDAUSDT", None),
+    )
+    assert derived["error"] is None
+    assert govern({"action": "LONG", "symbol": "NVDAUSDT", "size_frac": 0.05, "horizon_hours": 24, "confidence": 0.8}, derived["context"])["verdict"] == "APPROVED"
+
+    advance_positions(store, [entry_book], datetime.fromisoformat(opened_at))
+    opened = store.fill_for_key(fill_key)
+    assert opened["status"] == "PAPER_FILLED"
+    assert opened["cost_json"]["entry_book_hash"] == "entry-book"
+    assert lifecycle_intact(store, opened["id"])
+
+    store.update_fill(
+        opened["id"],
+        cost_json={**opened["cost_json"], "funding_rates": [0.0001, 0.0001, 0.0001]},
+    )
+    advance_positions(store, [exit_book], datetime.fromisoformat(exit_at))
+    closed = store.fill_for_key(fill_key)
+    assert closed["status"] == "CLOSED"
+    assert closed["cost_json"]["funding_source"] == "venue_funding"
+    assert closed["cost_json"]["funding_usdt"] == 0.15
+    assert closed["cost_json"]["outcome_bp"] == 84.94
+    assert lifecycle_intact(store, closed["id"])
+
+    receipt = store.receipt_for_decision(approved["decision_id"])
+    assert receipt is not None
+    assert verify_line(public, receipt["line"]) is True
+    assert chain_intact(public, store.list_ledger())
+    tampered = {**receipt["line"], "body": {**receipt["line"]["body"], "status": "CLOSED"}}
+    assert verify_line(public, tampered) is False
+    assert production_ledger.ledger == []

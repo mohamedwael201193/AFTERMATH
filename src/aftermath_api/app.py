@@ -194,21 +194,7 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
         reader(request)
         if limit < 1 or limit > 200:
             raise ApiError("SCHEMA", "limit out of range", 422)
-        items = []
-        for row in store.list_decisions(limit=limit):
-            if not row:
-                continue
-            receipt = store.receipt_for_decision(row["id"])
-            items.append({
-                "id": row["id"],
-                "created_at_utc": row.get("created_at_utc"),
-                "status": row.get("status"),
-                "reason": row.get("reason"),
-                "decision_source": row.get("decision_source"),
-                "model_called": row.get("decision_source") == "model",
-                "receipt_id": None if receipt is None else receipt["id"],
-            })
-        return {"items": items}
+        return {"items": store.list_decision_headers(limit=limit)}
 
     @app.get("/v1/paper/fills")
     def fills(request: Request):
@@ -268,22 +254,18 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
     @app.get("/v1/ops/status")
     def ops_status(request: Request):
         reader(request)
-        run = store.latest_run()
-        if run and run.get("decision_id"):
-            receipt = store.receipt_for_decision(run["decision_id"])
-            run = {**run, "receipt_id": None if receipt is None else receipt["id"]}
+        counts = store.dashboard_counts()
+        run = counts["latest_run"]
         sec = "configured" if settings.sec_user_agent else "disabled"
-        fills = store.list_fills()
-        opened = [row for row in fills if row.get("status") in ("PAPER_FILLED", "CLOSED")]
         return {
             "latest_run": run,
             "scheduler": "external_hourly_post",
             "schedule": "github_actions_hourly",
             "continuous_operation": False,
             "stale": _run_is_stale(run),
-            "fill_count": len(opened),
-            "decision_count": store.count_decisions(),
-            "event_count": store.count_events(),
+            "fill_count": counts["fill_count"],
+            "decision_count": counts["decision_count"],
+            "event_count": counts["event_count"],
             "paper_only": True,
             "kill_switch": os.environ.get("AFTERMATH_KILL") == "1",
             "sources": {"sec_edgar": {"status": sec, "reason": None if settings.sec_user_agent else "sec_user_agent_missing"}},
