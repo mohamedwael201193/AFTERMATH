@@ -89,6 +89,12 @@ function MarketStatusChips({ cycle }: { cycle: ReturnType<typeof useDashboardDat
       <span className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft">
         Last cycle model calls · {modelCalls == null ? "n/a" : modelCalls}
       </span>
+      <span
+        className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft"
+        title="Wall time of the latest completed paper cycle, including the evidence gate. The model was not called when model calls are 0."
+      >
+        Last cycle · {cycle?.latestDurationSeconds == null ? "n/a" : `${cycle.latestDurationSeconds.toFixed(1)} s`}
+      </span>
       <span className="rounded-full border border-line-strong bg-paper px-2.5 py-1 font-semibold text-ink-soft">
         {cycle?.hf1Failed
           ? "H-HF-1 · scan failed · not a trade"
