@@ -230,7 +230,9 @@ def test_model_no_action_produces_no_fill(tmp_path):
 
 def test_governor_refusal_produces_no_fill(tmp_path):
     report, store, _public, transport = _run(tmp_path, market=_market(n_precedents=1))
-    assert transport.calls["n"] == 1
+    assert transport.calls["n"] == 0
+    assert report["model_calls"] == 0
+    assert report["decision"]["reason"] == "governor_precheck:precedents_ok"
     assert report["governor"]["verdict"] == "REFUSED"
     assert report["governor"]["checks"]
     assert store.list_fills() == []

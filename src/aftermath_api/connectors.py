@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -391,6 +392,10 @@ def market_from_public(connector, symbol: str, end_ms: int, n_precedents: int) -
     fit = hedge_fit(symbol_rows, reference_rows)
     if fit["hedge_r2"] is None or fit["hedge_beta"] is None:
         return None
+    session = hedge_fit(
+        [row for row in symbol_rows if _regular_session(row[0])],
+        [row for row in reference_rows if _regular_session(row[0])],
+    )
     built = {
         "contract": {
             "status": contract["status"],
@@ -399,6 +404,8 @@ def market_from_public(connector, symbol: str, end_ms: int, n_precedents: int) -
         },
         "n_precedents": n_precedents,
         "hedge_r2": fit["hedge_r2"],
+        "hedge_r2_all_hours": fit["hedge_r2"],
+        "hedge_r2_session": session["hedge_r2"],
         "hedge_beta": fit["hedge_beta"],
         "hedge_pairs": fit["pairs"],
         "reference": "QQQUSDT",
@@ -407,6 +414,18 @@ def market_from_public(connector, symbol: str, end_ms: int, n_precedents: int) -
         if contract.get(key) is not None:
             built[key] = contract[key]
     return built
+
+
+def _regular_session(open_ms) -> bool:
+    """US cash session in America/New_York. The governor still uses the all-hours fit."""
+    try:
+        instant = datetime.fromtimestamp(int(open_ms) / 1000, ZoneInfo("America/New_York"))
+    except (TypeError, ValueError, OSError):
+        return False
+    if instant.weekday() >= 5:
+        return False
+    minutes = instant.hour * 60 + instant.minute
+    return 9 * 60 + 30 <= minutes < 16 * 60
 
 
 def hedge_fit(symbol_rows: list[list], reference_rows: list[list]) -> dict:

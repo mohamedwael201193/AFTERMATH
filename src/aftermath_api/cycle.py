@@ -219,6 +219,7 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", even
             "sec_edgar": "configured" if settings.sec_user_agent.strip() else "disabled",
             "hf1": _hf1_detail(settings, now, hf1_scan),
             **({"unbound_numbers": result["unbound_numbers"]} if result.get("unbound_numbers") else {}),
+            **({"precheck": result["precheck"]} if result.get("precheck") else {}),
         },
     })
     return {
@@ -361,6 +362,10 @@ def _decide_or_abstain(settings, store, observations, loaded, rows, now, transpo
     filing, _book = pair
     if not _document_ready(filing):
         return abstain("filing_document_missing", rows), 0
+    fetch = _market_fetch(settings, store, market_fetch)
+    refused, prepared = _precheck(store, filing, loaded, rows, now, fetch)
+    if refused is not None:
+        return refused, 0
     cap = int(getattr(settings, "llm_daily_cap", 3))
     used = store.model_calls_on_day(now.strftime("%Y-%m-%d"))
     result = decide_bounded(
@@ -372,7 +377,9 @@ def _decide_or_abstain(settings, store, observations, loaded, rows, now, transpo
         daily_cap=cap,
     )
     if result.get("reason") == "awaiting_next_book" and result.get("proposal"):
-        result = _hold_if_approved(result, loaded, rows, store, now, _market_fetch(settings, store, market_fetch))
+        result = _hold_if_approved(result, loaded, rows, store, now, fetch, prepared)
+    if prepared is not None:
+        result["precheck"] = _hedge_record(prepared)
     return result, 1 if result.get("model_called") else 0
 
 
@@ -389,11 +396,13 @@ def _document_ready(filing: dict) -> bool:
     )
 
 
-def _precedent_count(store) -> int:
+def _precedent_count(store, symbol: str | None = None) -> int:
     if hasattr(store, "count_reactions"):
-        return int(store.count_reactions())
+        return int(store.count_reactions(symbol))
     count = 0
     for item in (store.list_events(limit=200).get("items") or []):
+        if symbol is not None and (item.get("instrument_id") != symbol or item.get("source") != "sec-edgar"):
+            continue
         payload = item.get("payload") or {}
         reaction = payload.get("reaction_bp")
         if payload.get("counted") is True and isinstance(reaction, (int, float)) and not isinstance(reaction, bool):
@@ -412,12 +421,71 @@ def _market_fetch(settings, store, injected):
 
         cache = Path("/tmp/aftermath-cache") if Path("/tmp").is_dir() else Path(".") / "cache"
         cache.mkdir(parents=True, exist_ok=True)
-        return market_from_public(BitgetConnector(cache), symbol, int(now.timestamp() * 1000), _precedent_count(store))
+        return market_from_public(BitgetConnector(cache), symbol, int(now.timestamp() * 1000), _precedent_count(store, symbol))
 
     return fetch
 
 
-def _hold_if_approved(result: dict, loaded: list[dict], rows, store, now, market_fetch) -> dict:
+_PLACEHOLDER = {"action": "LONG", "size_frac": 0.05, "confidence": 1.0, "horizon_hours": 24.0}
+_SIDE_FREE = {
+    "emergency_stop_off",
+    "symbol_matches_event",
+    "symbol_whitelisted",
+    "contract_tradeable",
+    "data_fresh",
+    "event_fresh",
+    "daily_loss_ok",
+    "drawdown_ok",
+    "symbol_loss_ok",
+    "not_already_positioned",
+    "open_positions_ok",
+    "precedents_ok",
+    "hedge_fit_ok",
+    "spread_ok",
+}
+
+
+def _hedge_record(market: dict) -> dict:
+    all_hours = market.get("hedge_r2_all_hours", market.get("hedge_r2"))
+    return {"hedge_r2_all_hours": all_hours, "hedge_r2_session": market.get("hedge_r2_session")}
+
+
+def _precheck(store, filing: dict, loaded: list[dict], rows, now, market_fetch):
+    """Refuse a side-independent governor failure before any model call."""
+    if market_fetch is None:
+        return None, None
+    symbol = filing.get("instrument_id")
+    fetched = market_fetch(symbol, now)
+    if not isinstance(fetched, dict):
+        return abstain("governor_precheck:incomplete_market", rows), None
+    from .positions import portfolio_state
+
+    state = portfolio_state(store, now)
+    by_symbol = state.pop("symbol_pnl_by_symbol", {})
+    if state.get("day_pnl") is None or state.get("drawdown") is None:
+        return abstain("governor_precheck:incomplete_market:pnl", rows), fetched
+    state["symbol_pnl_today"] = float(by_symbol.get(symbol, 0.0))
+    proposal = {**_PLACEHOLDER, "symbol": symbol}
+    events = [row["event"] for row in loaded if isinstance(row.get("event"), dict)]
+    derived = derive_execution(proposal, events, "model", now=now, market={**state, **fetched})
+    if derived["error"]:
+        refused = abstain("governor_precheck:" + derived["error"], rows)
+        refused["precheck"] = _hedge_record(fetched)
+        return refused, fetched
+    try:
+        verdict = govern(proposal, derived["context"])
+    except (KeyError, TypeError, ValueError):
+        return abstain("governor_precheck:invalid_risk_context", rows), fetched
+    failed = [name for name in (verdict.get("reasons") or []) if name in _SIDE_FREE]
+    if failed:
+        refused = abstain("governor_precheck:" + ",".join(failed), rows)
+        refused["precheck"] = _hedge_record(fetched)
+        refused["governor"] = verdict
+        return refused, fetched
+    return None, fetched
+
+
+def _hold_if_approved(result: dict, loaded: list[dict], rows, store, now, market_fetch, prepared=None) -> dict:
     from .positions import portfolio_state
 
     proposal = dict(result["proposal"])
@@ -427,8 +495,11 @@ def _hold_if_approved(result: dict, loaded: list[dict], rows, store, now, market
     result["proposal"] = proposal
     events = [row["event"] for row in loaded if isinstance(row.get("event"), dict)]
     market = None
-    if market_fetch is not None:
+    if prepared is not None:
+        fetched = prepared
+    elif market_fetch is not None:
         fetched = market_fetch(proposal.get("symbol"), now)
+    if prepared is not None or market_fetch is not None:
         if not isinstance(fetched, dict):
             refused = abstain("incomplete_market:source", rows, result["prompt_hash"])
             refused["decision_source"] = "model"

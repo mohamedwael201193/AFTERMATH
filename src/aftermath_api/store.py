@@ -72,9 +72,11 @@ class MemoryStore:
                 return True
         return False
 
-    def count_reactions(self) -> int:
+    def count_reactions(self, symbol: str | None = None) -> int:
         count = 0
         for row in self.events.values():
+            if symbol is not None and (row.get("instrument_id") != symbol or row.get("source") != "sec-edgar"):
+                continue
             payload = row.get("payload") or {}
             reaction = payload.get("reaction_bp")
             if payload.get("counted") is True and isinstance(reaction, (int, float)) and not isinstance(reaction, bool):
@@ -360,13 +362,16 @@ class PostgresStore:
             ).fetchone()
         return row is not None
 
-    def count_reactions(self) -> int:
+    def count_reactions(self, symbol: str | None = None) -> int:
+        sql = f"""SELECT COUNT(*) FROM {self.schema}.events
+                  WHERE payload->>'counted' = 'true'
+                    AND jsonb_typeof(payload->'reaction_bp') = 'number'"""
+        args: list = []
+        if symbol is not None:
+            sql += " AND source = 'sec-edgar' AND instrument_id = %s"
+            args.append(symbol)
         with self._connect() as conn:
-            row = conn.execute(
-                f"""SELECT COUNT(*) FROM {self.schema}.events
-                    WHERE payload->>'counted' = 'true'
-                      AND jsonb_typeof(payload->'reaction_bp') = 'number'"""
-            ).fetchone()
+            row = conn.execute(sql, args).fetchone()
         return int(row[0])
 
     def insert_evidence(self, row: dict) -> dict:

@@ -139,6 +139,12 @@ def _apply_market(context: dict, market: dict | None) -> dict:
     context["n_precedents"] = precedents
     context["hedge_r2"] = float(hedge_r2)
     context["hedge_beta"] = float(hedge_beta)
+    for key in ("hedge_r2_all_hours", "hedge_r2_session"):
+        value = market.get(key)
+        if value is None and key in market:
+            context[key] = None
+        elif isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)):
+            context[key] = float(value)
     context["emergency_stop"] = context["emergency_stop"] or bool(market.get("emergency_stop"))
     for key in ("gross_open_usdt", "symbol_pnl_today", "day_pnl", "drawdown"):
         if key in market:

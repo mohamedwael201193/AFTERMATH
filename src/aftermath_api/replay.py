@@ -296,6 +296,8 @@ def _report(
     document_ready,
 ) -> dict:
     payload = filing.get("payload") or {}
+    if verdict is None and isinstance(result.get("governor"), dict):
+        verdict = result["governor"]
     proposal = result.get("proposal") if isinstance(result.get("proposal"), dict) else governed_proposal
     if not isinstance(proposal, dict):
         proposal = {}
