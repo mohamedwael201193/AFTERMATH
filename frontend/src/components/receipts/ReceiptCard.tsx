@@ -23,7 +23,13 @@ export function ReceiptCard({
 }) {
   const [copied, setCopied] = useState(false);
   const [explanation, setExplanation] = useState<string | null>(null);
-  const meta = RECEIPT_VERIFICATION_LABELS[receipt.verification];
+  const meta = receipt.verification === "UNCONFIRMED" && receipt.timestampAuthority === "Not anchored"
+    ? {
+        label: "Signature verified · not anchored",
+        tone: "neutral" as const,
+        caption: "The receipt signature checked out. No OpenTimestamps anchor was submitted.",
+      }
+    : RECEIPT_VERIFICATION_LABELS[receipt.verification];
 
   useEffect(() => {
     let alive = true;
@@ -41,7 +47,7 @@ export function ReceiptCard({
       setCopied(true);
       toast({
         title: "Digest copied",
-        description: "Illustrative digest copied to your clipboard.",
+        description: "The receipt digest was copied.",
       });
       setTimeout(() => setCopied(false), 1800);
     } catch {
