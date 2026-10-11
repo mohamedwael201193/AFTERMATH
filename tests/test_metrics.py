@@ -155,6 +155,7 @@ def test_golden_fixture_matches_hand_formulas():
     assert report["sharpe"] == expected_sharpe
     assert report["paired_agent_minus_fixed_bp"]["mean"] == expected_paired_mean
     assert report["costs"] == expected_costs
+    assert "spread_bp_mean" not in report["costs"]
     assert report["risk_control_violation_rate"] == expected_violation_rate
     assert report["max_drawdown_bp"] == expected_drawdown
 
@@ -162,6 +163,20 @@ def test_golden_fixture_matches_hand_formulas():
     low, high = _bootstrap_bounds(differences)
     assert report["paired_agent_minus_fixed_bp"]["bootstrap_95"]["low"] == low
     assert report["paired_agent_minus_fixed_bp"]["bootstrap_95"]["high"] == high
+
+
+def test_quoted_spread_is_reported_and_not_added_to_the_net():
+    rows = []
+    for index in range(30):
+        row = _pair(1, f"2026-04-{index + 1:02d}T00:00:00+00:00", fees_bp=1, funding_bp=1, slippage_bp=1)
+        row["spread_bp"] = 2
+        rows.append(row)
+    report = evaluate(rows)
+    assert report["status"] == "OBSERVED"
+    assert report["net_return_bp"] == 30
+    assert report["costs"]["fees_bp_mean"] == 1
+    assert report["costs"]["spread_bp_mean"] == 2
+    assert "not added again" in report["costs"]["spread_note"]
 
 
 def test_a_small_sample_does_not_grow_an_exposure_or_a_sharpe():

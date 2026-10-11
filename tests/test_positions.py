@@ -78,6 +78,7 @@ def test_later_book_entry_and_exit_match_the_cost_model():
     assert opened["cost_json"]["entry_book_hash"] == "entry-book"
     assert opened["cost_json"]["entry"]["vwap"] == 100.0
     assert opened["cost_json"]["entry"]["fee_usdt"] == 0.06
+    assert opened["cost_json"]["entry_spread_bp"] == 2.0
     exit_book = _book(exit_at, "exit-book", 100.99, 101.01, [[101.0, 10]], [[101.02, 10]])
     opened["cost_json"]["funding_rates"] = [0.0001, 0.0001, 0.0001]
     closed = close_later(opened["cost_json"], [exit_book], datetime.fromisoformat(exit_at))
@@ -88,6 +89,9 @@ def test_later_book_entry_and_exit_match_the_cost_model():
     assert closed["cost_json"]["funding_source"] == "venue_funding"
     assert closed["cost_json"]["net_usdt"] == 0.8494
     assert closed["cost_json"]["outcome_bp"] == 84.94
+    assert closed["cost_json"]["exit_spread_bp"] == round((101.01 - 100.99) / 101 * 1e4, 4)
+    quoted = paired_from_fills([{"cost_json": closed["cost_json"]}])[0]
+    assert quoted["spread_bp"] == round((2.0 + closed["cost_json"]["exit_spread_bp"]) / 2, 4)
     assert closed["cost_json"]["exit_book_hash"] == "exit-book"
     baselines = closed["cost_json"]["baselines"]
     assert baselines["fixed_sign_bp"] == 84.94

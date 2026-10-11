@@ -50,6 +50,9 @@ def evaluate(pairs: list[dict]) -> dict:
     costs = _cost_summary(rows)
     if costs is not None:
         report["costs"] = costs
+        if all("spread_bp" in row for row in rows):
+            report["costs"]["spread_bp_mean"] = round(statistics.fmean(_num(row, "spread_bp") for row in rows), 4)
+            report["costs"]["spread_note"] = "Quoted bid-ask width. The net return already includes the book walk, so this is not added again."
     violations = sum(1 for row in rows if row.get("risk_control_violation") is True)
     report["risk_control_violation_rate"] = round(violations / len(rows), 4)
     exposure = _exposure_block(rows)

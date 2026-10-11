@@ -156,6 +156,7 @@ def enter_later(pending: dict, books: list[dict]) -> dict:
             "entry_profile": _json_profile(derived["profile"]),
             "opened_at": book.get("fetched_at_utc"),
             "fee_rate": fee_rate,
+            **_spread_field("entry_spread_bp", book),
         },
     }
 
@@ -230,6 +231,24 @@ def mark_later(cost: dict, books: list[dict], now: datetime) -> dict:
     return {"status": "PAPER_FILLED", "changed": True, "cost_json": marked}
 
 
+def _spread_field(key: str, book: dict) -> dict:
+    """Quoted bid-ask width. It is not added to slippage; the book walk already crosses it."""
+    payload = (book or {}).get("payload") or {}
+    try:
+        value = float(payload["spread_bp"])
+    except (KeyError, TypeError, ValueError):
+        try:
+            bid = float(payload["bid"])
+            ask = float(payload["ask"])
+            mid = (bid + ask) / 2
+            value = (ask - bid) / mid * 1e4 if mid > 0 else float("nan")
+        except (KeyError, TypeError, ValueError):
+            return {}
+    if value != value or value < 0:
+        return {}
+    return {key: round(value, 4)}
+
+
 def _approved_fee(cost: dict) -> float | None:
     """The contract taker fee approved with the trade. A book snapshot carries no fee of its own."""
     try:
@@ -294,6 +313,7 @@ def close_later(cost: dict, books: list[dict], now: datetime) -> dict:
             "net_usdt": None if net is None else round(net, 6),
             "outcome_bp": None if net is None or not filled else round(net / filled * 1e4, 4),
             "baselines": _baselines(cost, derived, opened, closed_at, cost.get("funding_rates")),
+            **_spread_field("exit_spread_bp", book),
         },
     }
 
@@ -360,6 +380,16 @@ def _pair_cost_fields(cost: dict) -> dict:
             continue
     if saw_slippage:
         out["slippage_bp"] = round(slip_usdt / filled * 1e4, 4)
+    quoted = []
+    for key in ("entry_spread_bp", "exit_spread_bp"):
+        try:
+            value = float(cost[key])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if value == value and value >= 0:
+            quoted.append(value)
+    if quoted:
+        out["spread_bp"] = round(sum(quoted) / len(quoted), 4)
     if cost.get("risk_control_violation") is True:
         out["risk_control_violation"] = True
     return out
