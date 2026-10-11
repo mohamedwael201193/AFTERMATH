@@ -204,7 +204,7 @@ async function explainVerification(receipt: SignedReceipt): Promise<string> {
   if (receipt.verification === "STRUCTURE_VERIFIED") {
     return "Structure checks passed in the preview workspace: every expected field is present and internally consistent. This is not a cryptographic verification — no real signature exists in the preview environment.";
   }
-  return "This is a simulated receipt presentation. In production, the digest, signature, and timestamp authority could be independently checked outside AFTERMATH. Nothing here should be read as a verified live record.";
+  return "This is a simulated receipt presentation. In production, the digest and signature can be checked outside AFTERMATH with the published public key; receipts are not externally timestamped. Nothing here should be read as a verified live record.";
 }
 
 export const previewDataProvider = {

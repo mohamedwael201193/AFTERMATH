@@ -778,8 +778,8 @@ def _run_row(row) -> dict:
 
 OPERATION_HOURS = 48
 OPERATION_LOOKBACK_HOURS = 72
-_RUN_KEY_PREFIX = "paper-cycle:v2:"
-_HOUR_KEY = re.compile(r"^paper-cycle:v2:(\d{4}-\d{2}-\d{2}T\d{2})(?:$|:)")
+# Cycles before the v2 key used "paper-cycle:<hour>"; both are persisted cycle runs.
+_HOUR_KEY = re.compile(r"^paper-cycle:(?:v2:)?(\d{4}-\d{2}-\d{2}T\d{2})(?:$|:)")
 # Reasons written before the model is called. filing_document_missing is the cycle's document_not_ready.
 _PRE_MODEL_REASONS = frozenset({
     "no_qualifying_event",

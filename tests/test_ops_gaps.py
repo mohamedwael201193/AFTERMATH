@@ -189,6 +189,24 @@ def test_duplicate_hour_rows_count_once():
     assert report["latest_duration_seconds"] == 12
 
 
+def test_a_cycle_written_with_the_earlier_key_counts_as_a_recorded_hour():
+    hour = _hour(-2)
+    started = hour + timedelta(minutes=36)
+    run = {
+        "idempotency_key": "paper-cycle:" + _token(-2),
+        "status": "refused",
+        "reason": "missing_order_book",
+        "started_at_utc": started.isoformat(),
+        "finished_at_utc": (started + timedelta(seconds=20)).isoformat(),
+        "detail": {"model_calls": 0, "fetch_errors": 0},
+    }
+    report = build_operation_status([run], [], 0, NOW)
+    assert report["recorded_hours"] == 1
+    assert report["first_recorded_hour"] == _token(-2)
+    assert report["counters"]["scheduled_cycles"] == 1
+    assert report["counters"]["pre_model_refusals"] == 1
+
+
 def test_twenty_four_consecutive_completed_hours_are_observed():
     store = MemoryStore()
     for offset in range(1, 24):

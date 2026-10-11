@@ -21,7 +21,7 @@ const PRINCIPLES = [
   {
     icon: FileCheck2,
     title: "Receipts outlive the interface",
-    text: "Every outcome is written as a receipt with a digest, an algorithm, and a timestamp authority — a structure designed so an outsider could check what AFTERMATH claims it decided, and when.",
+    text: "Every outcome is written as a receipt with a digest, a signature, and the time AFTERMATH recorded it, chained to the receipt before it. An outsider can check the signature and the chain with the public key. The recorded time is AFTERMATH's own clock, not an external timestamp.",
   },
   {
     icon: Hourglass,

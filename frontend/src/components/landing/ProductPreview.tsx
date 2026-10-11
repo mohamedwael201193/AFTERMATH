@@ -272,8 +272,9 @@ export function ProductPreview({ onOpenDashboard }: { onOpenDashboard: () => voi
                       {receipt.digestPreview}
                     </p>
                     <p className="mt-2 text-xs leading-relaxed text-ink-soft">
-                      In production, the digest, signature, and timestamp authority
-                      could be independently checked outside AFTERMATH.
+                      In production, the digest and Ed25519 signature can be checked
+                      outside AFTERMATH with the published public key. Receipts are not
+                      externally timestamped.
                     </p>
                   </div>
                 </div>
