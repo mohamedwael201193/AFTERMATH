@@ -409,6 +409,8 @@ def market_from_public(connector, symbol: str, end_ms: int, n_precedents: int) -
         "hedge_beta": fit["hedge_beta"],
         "hedge_pairs": fit["pairs"],
         "reference": "QQQUSDT",
+        "symbol_bars": symbol_rows,
+        "reference_bars": reference_rows,
     }
     for key in _PROVENANCE_KEYS:
         if contract.get(key) is not None:

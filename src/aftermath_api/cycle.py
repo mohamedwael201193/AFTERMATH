@@ -220,6 +220,7 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", even
             "hf1": _hf1_detail(settings, now, hf1_scan),
             **({"unbound_numbers": result["unbound_numbers"]} if result.get("unbound_numbers") else {}),
             **({"precheck": result["precheck"]} if result.get("precheck") else {}),
+            **({"decision_input": result["decision_input"]} if result.get("decision_input") else {}),
         },
     })
     return {
@@ -375,6 +376,8 @@ def _decide_or_abstain(settings, store, observations, loaded, rows, now, transpo
         transport=transport,
         calls_today=used,
         daily_cap=cap,
+        market=prepared,
+        now=now,
     )
     if result.get("reason") == "awaiting_next_book" and result.get("proposal"):
         result = _hold_if_approved(result, loaded, rows, store, now, fetch, prepared)

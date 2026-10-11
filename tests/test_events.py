@@ -296,7 +296,7 @@ def test_model_cannot_invent_a_fill_from_a_headline():
     result = run_paper_cycle(
         _settings(), store, fetch=lambda: ([_book()], []), event_fetch=lambda: [_filing()], model_transport=transport,
     )
-    assert result["reason"] == "malformed_model_output"
+    assert result["reason"] == "unverifiable_number"
     assert store.fills == {}
     assert store.latest_run()["detail"]["model_calls"] == 1
 

@@ -29,8 +29,8 @@ def evidence_id(event: str, phash: str, schema_version: int = SCHEMA_VERSION) ->
     return "ev_" + hashlib.sha256(raw).hexdigest()[:24]
 
 
-def snapshot_hash(schema_version: int, prompt_hash: str, rows: list[tuple[str, str]]) -> str:
-    lines = [f"{schema_version}|{prompt_hash}"]
+def snapshot_hash(schema_version: int, prompt_hash: str | None, rows: list[tuple[str, str]]) -> str:
+    lines = [f"{schema_version}|{'' if prompt_hash is None else prompt_hash}"]
     for eid, phash in rows:
         lines.append(f"{eid}:{phash}")
     return hashlib.sha256("\n".join(lines).encode()).hexdigest()
