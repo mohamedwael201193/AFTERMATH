@@ -67,7 +67,8 @@ class MemoryStore:
 
     def has_accession(self, accession: str) -> bool:
         for row in self.events.values():
-            if (row.get("payload") or {}).get("accession") == accession:
+            payload = row.get("payload") or {}
+            if payload.get("accession") == accession and payload.get("status") != "document_pending":
                 return True
         return False
 
@@ -351,7 +352,10 @@ class PostgresStore:
     def has_accession(self, accession: str) -> bool:
         with self._connect() as conn:
             row = conn.execute(
-                f"SELECT 1 FROM {self.schema}.events WHERE payload->>'accession' = %s LIMIT 1",
+                f"""SELECT 1 FROM {self.schema}.events
+                    WHERE payload->>'accession' = %s
+                      AND COALESCE(payload->>'status', '') <> 'document_pending'
+                    LIMIT 1""",
                 (accession,),
             ).fetchone()
         return row is not None

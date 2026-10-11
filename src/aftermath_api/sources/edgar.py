@@ -13,6 +13,9 @@ from ..connectors import require_sec_user_agent
 MAX_EVENT_AGE = timedelta(minutes=360)
 DISCOVERY_WINDOW = timedelta(hours=30)
 EXCERPT_LIMIT = 480
+EXHIBIT_EXCERPT_LIMIT = 2000
+_EXHIBIT_RE = re.compile(r"EX-99\.1.{0,500}?href=\"([^\"]+)\"", re.IGNORECASE | re.DOTALL)
+_EXHIBIT_RE_REV = re.compile(r"href=\"([^\"]+)\"[^>]*>[^<]{0,80}</a>.{0,120}?EX-99\.1", re.IGNORECASE | re.DOTALL)
 _EASTERN = ZoneInfo("America/New_York")
 _ACCEPTANCE_RE = re.compile(r"ACCEPTANCE-DATETIME[^0-9]{0,40}([0-9]{14})")
 COUNTED_ITEMS = {"2.02"}
@@ -43,20 +46,100 @@ def fetch_filings(user_agent: str, transport, fetched_at: str, now: datetime | N
         response = transport(url, {"User-Agent": user_agent, "Accept": "application/json"})
         payload = response if isinstance(response, dict) else json.loads(response)
         found.extend(select_filings(symbol, payload, fetched_at, now=now, seen=seen, index_lookup=_index_lookup(user_agent, transport)))
+    headers = {"User-Agent": user_agent, "Accept": "text/html"}
     attached = []
     for row in found:
         if not (row.get("payload") or {}).get("counted"):
             attached.append(row)
             continue
-        url = (row.get("payload") or {}).get("source_url")
-        try:
-            body = transport(url, {"User-Agent": user_agent, "Accept": "text/html"}) if url else None
-        except Exception:
-            attached.append(row)
-            continue
-        attached.append(attach_document(row, body) if isinstance(body, str) else row)
+        attached.append(_bind_exhibit(row, transport, headers))
     attached.sort(key=lambda row: row["event_time_utc"])
     return attached
+
+
+def _bind_exhibit(filing: dict, transport, headers: dict) -> dict:
+    """Hash the primary file and the EX-99.1 text. A failed exhibit fetch stays pending and is not the XML header."""
+    payload = dict(filing.get("payload") or {})
+    source = payload.get("source_url")
+    if isinstance(source, str) and source:
+        try:
+            primary = transport(source, headers)
+        except Exception:
+            primary = None
+        if isinstance(primary, str) and primary.strip():
+            filing = attach_document(filing, primary)
+            payload = dict(filing.get("payload") or {})
+    index_url = _index_page_url(source, payload.get("accession") or "")
+    try:
+        index_body = transport(index_url, headers) if index_url else None
+    except Exception:
+        index_body = None
+    exhibit_url = exhibit_url_from_index(index_body if isinstance(index_body, str) else "", source or "")
+    if not exhibit_url:
+        return _pending_document(filing)
+    try:
+        exhibit = transport(exhibit_url, headers)
+    except Exception:
+        return _pending_document(filing)
+    if not isinstance(exhibit, str) or not exhibit.strip():
+        return _pending_document(filing)
+    return attach_exhibit(filing, exhibit, exhibit_url)
+
+
+def _pending_document(filing: dict) -> dict:
+    payload = dict(filing.get("payload") or {})
+    payload["status"] = "document_pending"
+    payload.pop("excerpt", None)
+    payload.pop("excerpt_untrusted", None)
+    return {**filing, "payload": payload}
+
+
+def _index_page_url(source_url: str | None, accession: str) -> str | None:
+    if not isinstance(source_url, str) or "/" not in source_url or not accession:
+        return None
+    return source_url.rsplit("/", 1)[0] + "/" + accession + "-index.htm"
+
+
+def exhibit_url_from_index(index_html: str, source_url: str) -> str | None:
+    if not isinstance(index_html, str) or not index_html.strip():
+        return None
+    match = _EXHIBIT_RE.search(index_html) or _EXHIBIT_RE_REV.search(index_html)
+    if match is None:
+        return None
+    href = match.group(1).strip()
+    if not href or href.lower().startswith("javascript:"):
+        return None
+    if href.startswith("https://") or href.startswith("http://"):
+        return href
+    if href.startswith("/"):
+        return "https://www.sec.gov" + href
+    base = source_url.rsplit("/", 1)[0] if isinstance(source_url, str) and "/" in source_url else ""
+    return f"{base}/{href}" if base else None
+
+
+def plain_text(body: str) -> str:
+    text = re.sub(r"(?is)<script.*?>.*?</script>", " ", body)
+    text = re.sub(r"(?is)<style.*?>.*?</style>", " ", text)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    text = text.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def attach_exhibit(filing: dict, body: str, exhibit_url: str) -> dict:
+    """The earnings text is the exhibit. The primary file hash stays beside it."""
+    if not isinstance(body, str) or not body.strip():
+        return _pending_document(filing)
+    text = plain_text(body)
+    if not text or text.lstrip().startswith("<?xml"):
+        return _pending_document(filing)
+    payload = dict(filing.get("payload") or {})
+    payload.pop("status", None)
+    payload["exhibit_url"] = exhibit_url
+    payload["exhibit_sha256"] = hashlib.sha256(body.encode()).hexdigest()
+    payload["exhibit_excerpt"] = text[:EXHIBIT_EXCERPT_LIMIT]
+    payload["excerpt"] = payload["exhibit_excerpt"]
+    payload["excerpt_untrusted"] = True
+    return {**filing, "payload": payload}
 
 
 def attach_document(filing: dict, body: str) -> dict:
