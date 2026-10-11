@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from ..connectors import require_sec_user_agent
 
 MAX_EVENT_AGE = timedelta(minutes=360)
+DISCOVERY_WINDOW = timedelta(hours=30)
 EXCERPT_LIMIT = 480
+_EASTERN = ZoneInfo("America/New_York")
+_ACCEPTANCE_RE = re.compile(r"ACCEPTANCE-DATETIME[^0-9]{0,40}([0-9]{14})")
 COUNTED_ITEMS = {"2.02"}
 SHADOW_ITEMS = {"7.01", "8.01"}
 
@@ -37,7 +42,7 @@ def fetch_filings(user_agent: str, transport, fetched_at: str, now: datetime | N
         url = f"https://data.sec.gov/submissions/CIK{cik}.json"
         response = transport(url, {"User-Agent": user_agent, "Accept": "application/json"})
         payload = response if isinstance(response, dict) else json.loads(response)
-        found.extend(select_filings(symbol, payload, fetched_at, now=now, seen=seen))
+        found.extend(select_filings(symbol, payload, fetched_at, now=now, seen=seen, index_lookup=_index_lookup(user_agent, transport)))
     attached = []
     for row in found:
         if not (row.get("payload") or {}).get("counted"):
@@ -65,8 +70,11 @@ def attach_document(filing: dict, body: str) -> dict:
     return {**filing, "payload": payload}
 
 
-def filing_from_submissions(symbol: str, payload: dict, fetched_at: str, now: datetime | None = None) -> dict | None:
-    counted = [row for row in select_filings(symbol, payload, fetched_at, now=now) if row["payload"].get("counted")]
+def filing_from_submissions(symbol: str, payload: dict, fetched_at: str, now: datetime | None = None, index_lookup=None) -> dict | None:
+    counted = [
+        row for row in select_filings(symbol, payload, fetched_at, now=now, index_lookup=index_lookup)
+        if row["payload"].get("counted")
+    ]
     return counted[0] if counted else None
 
 
@@ -76,6 +84,7 @@ def select_filings(
     fetched_at: str,
     now: datetime | None = None,
     seen: set[str] | None = None,
+    index_lookup=None,
 ) -> list[dict]:
     now = now or _parse(fetched_at) or datetime.now(timezone.utc)
     recent = ((payload or {}).get("filings") or {}).get("recent") or {}
@@ -84,7 +93,6 @@ def select_filings(
     accessions = recent.get("accessionNumber") or []
     documents = recent.get("primaryDocument") or []
     accepted = recent.get("acceptanceDateTime") or []
-    index_times = recent.get("indexAcceptanceDateTime") or []
     cik = str((payload or {}).get("cik") or "").zfill(10)
     chosen: list[dict] = []
     seen = seen if seen is not None else set()
@@ -98,7 +106,14 @@ def select_filings(
         accession = accessions[index] if index < len(accessions) else ""
         if not accession or accession in seen:
             continue
-        event_time = _accepted_at(accepted, index_times, index)
+        json_time = _parse(accepted[index] if index < len(accepted) else None)
+        if json_time is None or abs(now - json_time) > DISCOVERY_WINDOW:
+            continue
+        if index_lookup is None:
+            continue
+        header = index_lookup(cik, accession)
+        clock = acceptance_clock(header if isinstance(header, str) else "", json_time)
+        event_time = clock.get("accepted_at_utc")
         if event_time is None:
             continue
         if now - event_time > MAX_EVENT_AGE or event_time > now + timedelta(minutes=5):
@@ -113,6 +128,10 @@ def select_filings(
             "qualifies": kind == "counted",
             "counted": kind == "counted",
             "shadow": kind == "shadow",
+            "accepted_at_json": json_time.isoformat(),
+            "accepted_at_utc": event_time.isoformat(),
+            "clock_source": clock["clock_source"],
+            "json_minus_index_s": clock["json_minus_index_s"],
         }
         seen.add(accession)
         chosen.append({
@@ -136,14 +155,44 @@ def _item_kind(item: str) -> str | None:
     return None
 
 
-def _accepted_at(accepted: list, index_times: list, index: int) -> datetime | None:
-    primary = _parse(accepted[index] if index < len(accepted) else None)
-    index_time = _parse(index_times[index] if index < len(index_times) else None)
-    if primary and index_time and abs(primary - index_time) > timedelta(hours=24):
+def index_headers_url(cik: str, accession: str) -> str:
+    bare = accession.replace("-", "")
+    number = str(int(cik)) if str(cik).strip("0") else "0"
+    return f"https://www.sec.gov/Archives/edgar/data/{number}/{bare}/{accession}-index-headers.html"
+
+
+def parse_acceptance_header(body: str) -> datetime | None:
+    """Index-header ACCEPTANCE-DATETIME is America/New_York wall time, not UTC."""
+    if not isinstance(body, str) or not body.strip():
         return None
-    if index_time:
-        return index_time
-    return primary
+    match = _ACCEPTANCE_RE.search(body)
+    if match is None:
+        return None
+    try:
+        local = datetime.strptime(match.group(1), "%Y%m%d%H%M%S").replace(tzinfo=_EASTERN)
+    except ValueError:
+        return None
+    return local.astimezone(timezone.utc)
+
+
+def acceptance_clock(header_body: str, json_time: datetime | None) -> dict:
+    """The index header is the clock. A missing header is not replaced with the JSON instant."""
+    instant = parse_acceptance_header(header_body)
+    if instant is None:
+        return {"clock_source": "acceptance_time_unverified", "accepted_at_utc": None, "json_minus_index_s": None}
+    delta = None if json_time is None else (json_time - instant).total_seconds()
+    return {"clock_source": "sec_index_header", "accepted_at_utc": instant, "json_minus_index_s": delta}
+
+
+def _index_lookup(user_agent: str, transport):
+    def lookup(cik: str, accession: str):
+        try:
+            body = transport(index_headers_url(cik, accession), {"User-Agent": user_agent, "Accept": "text/html"})
+        except Exception:
+            return None
+        return body if isinstance(body, str) else None
+
+    return lookup
 
 
 def _parse(value) -> datetime | None:
