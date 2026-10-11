@@ -5,8 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import sys
+import threading
+import time
 from pathlib import Path
 
 import requests
@@ -77,13 +80,23 @@ def abstain(reason: str, rows: list[tuple[str, str]], prompt_hash: str | None = 
 MODEL_TIMEOUT_S = 90
 
 
-def call_model(
-    settings: Settings,
-    evidence_rows: list[dict],
-    transport=None,
-    prompt: str | None = None,
-    decision_input: dict | None = None,
-) -> str:
+class LlmTimeout(Exception):
+    def __init__(self, latency_ms: int):
+        self.latency_ms = latency_ms
+
+
+def llm_deadline_s() -> float:
+    raw = os.environ.get("AFTERMATH_LLM_DEADLINE_S", "150")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 150.0
+    if not math.isfinite(value) or value < 1 or value > 600:
+        return 150.0
+    return value
+
+
+def _chat_body(settings: Settings, evidence_rows: list[dict], prompt: str | None, decision_input: dict | None) -> dict:
     facts = []
     for r in evidence_rows:
         row = {"id": r["id"], "payload_hash": r["payload_hash"], "facts": r.get("facts", {})}
@@ -101,26 +114,97 @@ def call_model(
     }
     if decision_input is not None:
         body["response_format"] = DECISION_SCHEMA
+    return body
+
+
+def call_model(
+    settings: Settings,
+    evidence_rows: list[dict],
+    transport=None,
+    prompt: str | None = None,
+    decision_input: dict | None = None,
+) -> str:
+    body = _chat_body(settings, evidence_rows, prompt, decision_input)
     post = transport or requests.post
+    url = settings.llm_base_url.rstrip("/") + "/chat/completions"
+    headers = {"Authorization": f"Bearer {settings.llm_api_key}"}
+    if decision_input is not None:
+        response, _latency = _one_attempt(post, url, body, headers, llm_deadline_s())
+    else:
+        response = _legacy_attempts(post, url, body, headers)
+    if response is None or getattr(response, "status_code", 200) >= 400:
+        raise RuntimeError("llm request failed")
+    return response.json()["choices"][0]["message"]["content"]
+
+
+def _legacy_attempts(post, url: str, body: dict, headers: dict):
     last = None
     for _attempt in range(2):
-        response = post(
-            settings.llm_base_url.rstrip("/") + "/chat/completions",
-            json=body,
-            headers={"Authorization": f"Bearer {settings.llm_api_key}"},
-            timeout=MODEL_TIMEOUT_S,
-        )
+        response = post(url, json=body, headers=headers, timeout=MODEL_TIMEOUT_S)
         status = getattr(response, "status_code", 200)
         if status == 401 and _attempt == 0:
             last = response
             continue
         if status >= 400:
             response.raise_for_status()
-        last = response
-        break
-    if last is None or getattr(last, "status_code", 200) >= 400:
+        return response
+    return last
+
+
+def _one_attempt(post, url: str, body: dict, headers: dict, deadline: float):
+    """One request. The wait covers the body read and does not start a second call."""
+    started = time.monotonic()
+    box: dict = {}
+
+    def run() -> None:
+        try:
+            box["response"] = post(url, json=body, headers=headers, timeout=deadline)
+        except Exception as exc:
+            box["error"] = exc
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(deadline)
+    latency_ms = int((time.monotonic() - started) * 1000)
+    if worker.is_alive():
+        raise LlmTimeout(latency_ms)
+    if "error" in box:
+        raise box["error"]
+    return box.get("response"), latency_ms
+
+
+def _bounded_text(settings: Settings, evidence_rows: list[dict], transport, decision_input: dict) -> tuple[str, int]:
+    body = _chat_body(settings, evidence_rows, PROMPT_V4, decision_input)
+    post = transport or requests.post
+    response, latency_ms = _one_attempt(
+        post,
+        settings.llm_base_url.rstrip("/") + "/chat/completions",
+        body,
+        {"Authorization": f"Bearer {settings.llm_api_key}"},
+        llm_deadline_s(),
+    )
+    if response is None or getattr(response, "status_code", 200) >= 400:
         raise RuntimeError("llm request failed")
-    return last.json()["choices"][0]["message"]["content"]
+    return response.json()["choices"][0]["message"]["content"], latency_ms
+
+
+def _no_trade(refuse, symbol: str, reason: str, latency_ms: int | None) -> dict:
+    refused = refuse(reason, called=True)
+    refused["status"] = "NO_ACTION"
+    refused["reason"] = reason
+    refused["latency_ms"] = latency_ms
+    refused["proposal"] = {
+        "action": "NO_ACTION",
+        "symbol": symbol,
+        "size_frac": SIZE_FRAC,
+        "horizon_hours": HORIZON_HOURS,
+        "confidence": 0.0,
+        "thesis": "",
+        "invalidation": "",
+        "cited_evidence_ids": [],
+        "text": "",
+    }
+    return refused
 
 
 def decide(settings: Settings, evidence_rows: list[dict], transport=None) -> dict:
@@ -204,9 +288,15 @@ def decide_bounded(
         return refuse("missing_order_book")
     decision_input = build_decision_input(evidence_rows, symbol, market, moment)
     try:
-        text = call_model(settings, evidence_rows, transport, prompt=PROMPT_V4, decision_input=decision_input)
+        text, latency_ms = _bounded_text(settings, evidence_rows, transport, decision_input)
+    except LlmTimeout as exc:
+        refused = _no_trade(refuse, symbol, "llm_timeout", exc.latency_ms)
+        refused["decision_input"] = decision_input
+        return refused
     except Exception:
-        return refuse("llm_unavailable", called=True)
+        refused = _no_trade(refuse, symbol, "llm_unavailable", None)
+        refused["decision_input"] = decision_input
+        return refused
     parsed = _parse(text)
     if isinstance(parsed, dict):
         if parsed.get("action") == "NO_TRADE":
@@ -243,6 +333,7 @@ def decide_bounded(
     out["decision_source"] = "model"
     out["proposal"] = parsed
     out["decision_input"] = decision_input
+    out["latency_ms"] = latency_ms
     if parsed.get("action") == "NO_ACTION":
         out["status"] = "NO_ACTION"
         out["reason"] = "model_no_action"

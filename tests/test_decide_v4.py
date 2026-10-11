@@ -1,6 +1,7 @@
 """Decision v4 input. The instrument is the server symbol, and only closed bars enter the residual."""
 
 import json
+import time
 from datetime import datetime, timezone
 
 from aftermath_api.config import Settings
@@ -183,3 +184,42 @@ def test_residual_uses_only_closed_bars():
         datetime(2026, 8, 26, 21, 0, tzinfo=timezone.utc),
     )
     assert early["residual"]["residual_bp"] is None
+
+
+def test_deadline_bounds_hung_read(monkeypatch):
+    monkeypatch.setenv("AFTERMATH_LLM_DEADLINE_S", "1")
+    calls = {"n": 0}
+
+    def transport(_url, json=None, headers=None, timeout=None):
+        calls["n"] += 1
+        time.sleep(400)
+
+    started = time.monotonic()
+    out = decide_bounded(_settings(), _rows(), symbol="NVDAUSDT", transport=transport)
+    assert time.monotonic() - started < 3
+    assert calls["n"] == 1
+    assert out["reason"] == "llm_timeout"
+    assert out["status"] == "NO_ACTION"
+    assert out["proposal"]["action"] == "NO_ACTION"
+    assert out["model_called"] is True
+    assert out["latency_ms"] < 3000
+
+
+def test_timeout_is_counted_and_not_retried(monkeypatch):
+    monkeypatch.setenv("AFTERMATH_LLM_DEADLINE_S", "1")
+    calls = {"n": 0}
+
+    def transport(_url, json=None, headers=None, timeout=None):
+        calls["n"] += 1
+        raise RuntimeError("proxy down")
+
+    out = decide_bounded(_settings(), _rows(), symbol="NVDAUSDT", transport=transport)
+    assert calls["n"] == 1
+    assert out["reason"] == "llm_unavailable"
+    assert out["status"] == "NO_ACTION"
+    assert out["model_called"] is True
+    blocked = decide_bounded(
+        _settings(), _rows(), symbol="NVDAUSDT", transport=transport, calls_today=1, daily_cap=1,
+    )
+    assert blocked["reason"] == "llm_budget_exhausted"
+    assert blocked.get("model_called") is not True
