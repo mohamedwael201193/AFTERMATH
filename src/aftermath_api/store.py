@@ -68,7 +68,11 @@ class MemoryStore:
     def has_accession(self, accession: str) -> bool:
         for row in self.events.values():
             payload = row.get("payload") or {}
-            if payload.get("accession") == accession and payload.get("status") != "document_pending":
+            if (
+                row.get("source") == "sec-edgar"
+                and payload.get("accession") == accession
+                and payload.get("status") != "document_pending"
+            ):
                 return True
         return False
 
@@ -355,7 +359,8 @@ class PostgresStore:
         with self._connect() as conn:
             row = conn.execute(
                 f"""SELECT 1 FROM {self.schema}.events
-                    WHERE payload->>'accession' = %s
+                    WHERE source = 'sec-edgar'
+                      AND payload->>'accession' = %s
                       AND COALESCE(payload->>'status', '') <> 'document_pending'
                     LIMIT 1""",
                 (accession,),

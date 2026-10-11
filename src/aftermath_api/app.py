@@ -465,6 +465,8 @@ def create_app(settings: Settings | None = None, store=None) -> FastAPI:
             or str(body.get("source", "")).lower() == "fixture"
         ):
             raise ApiError("SCHEMA", "fixture instruments are refused", 422)
+        if str(body.get("source", "")).strip().lower() == "sec-edgar":
+            raise ApiError("SCHEMA", "sec-edgar is reserved for the filing cycle", 422)
         symbol, _mapped, reason = resolve_symbol(str(body.get("instrument_id", "")))
         if symbol is None:
             raise ApiError("UNMAPPED_SYMBOL", reason or "unmapped", 422)

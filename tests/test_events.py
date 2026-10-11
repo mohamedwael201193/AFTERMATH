@@ -182,6 +182,7 @@ def test_accession_dedupe_uses_the_full_store():
     store = MemoryStore()
     store.insert_event({
         "id": "ev_old",
+        "source": "sec-edgar",
         "instrument_id": "NVDAUSDT",
         "event_type": "filing",
         "event_time_utc": "2026-01-01T00:00:00+00:00",
@@ -196,6 +197,7 @@ def test_a_seen_accession_does_not_call_the_model():
     filing = _filing()
     store.insert_event({
         "id": "ev_seen",
+        "source": "sec-edgar",
         "instrument_id": "NVDAUSDT",
         "event_type": "filing",
         "event_time_utc": filing["event_time_utc"],

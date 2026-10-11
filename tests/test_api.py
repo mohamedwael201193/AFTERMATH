@@ -108,6 +108,36 @@ def test_events_are_immutable():
     raise AssertionError("update was accepted")
 
 
+def test_reserved_source_rejected():
+    http = client()
+    now = _now()
+    blocked = http.post(
+        "/v1/events",
+        headers={"Authorization": "Bearer decision-token"},
+        json={
+            "source": "SEC-EDGAR",
+            "instrument_id": "NVDAUSDT",
+            "event_type": "filing",
+            "event_time_utc": now,
+            "fetched_at_utc": now,
+            "payload": {"accession": "0001045810-26-000073", "counted": True, "reaction_bp": 10},
+        },
+    )
+    assert blocked.status_code == 422
+    assert blocked.json()["error"]["code"] == "SCHEMA"
+    store = MemoryStore()
+    store.insert_event({
+        "id": "ev_injected",
+        "source": "api",
+        "instrument_id": "NVDAUSDT",
+        "event_type": "filing",
+        "event_time_utc": now,
+        "payload": {"accession": "0001045810-26-000073", "counted": True, "reaction_bp": 10},
+    })
+    assert store.has_accession("0001045810-26-000073") is False
+    assert store.count_reactions("NVDAUSDT") == 0
+
+
 def test_low_confidence_and_future_rejected():
     http = client()
     now = _now()

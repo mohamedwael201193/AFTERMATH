@@ -81,6 +81,7 @@ def test_transient_document_failure_retries():
     store = MemoryStore()
     store.insert_event({
         "id": "ev_pending",
+        "source": failed[0]["source"],
         "instrument_id": "NVDAUSDT",
         "event_type": "filing",
         "event_time_utc": failed[0]["event_time_utc"],
@@ -97,6 +98,7 @@ def test_transient_document_failure_retries():
     assert recovered[0]["payload"]["exhibit_sha256"]
     store.insert_event({
         "id": "ev_ready",
+        "source": recovered[0]["source"],
         "instrument_id": "NVDAUSDT",
         "event_type": "filing",
         "event_time_utc": recovered[0]["event_time_utc"],

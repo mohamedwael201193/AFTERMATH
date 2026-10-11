@@ -313,7 +313,7 @@ def _already_seen(store, filing: dict) -> bool:
         return bool(store.has_accession(accession))
     page = store.list_events(limit=200)
     for item in page.get("items") or []:
-        if (item.get("payload") or {}).get("accession") == accession:
+        if item.get("source") == "sec-edgar" and (item.get("payload") or {}).get("accession") == accession:
             return True
     return False
 
