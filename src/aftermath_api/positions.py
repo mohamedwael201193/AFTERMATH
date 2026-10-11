@@ -186,15 +186,51 @@ def paired_from_fills(fills: list[dict]) -> list[dict]:
             continue
         if any(baselines.get(f"{name}_bp") is None for name in ("fixed_sign", "llm_off", "random", "no_trade")):
             continue
-        pairs.append({
+        pair = {
             "closed_at": cost["closed_at"],
             "agent_bp": float(cost["outcome_bp"]),
             "fixed_sign_bp": float(baselines["fixed_sign_bp"]),
             "llm_off_bp": float(baselines["llm_off_bp"]),
             "random_bp": float(baselines["random_bp"]),
             "no_trade_bp": float(baselines["no_trade_bp"]),
-        })
+        }
+        pair.update(_pair_cost_fields(cost))
+        pairs.append(pair)
     return pairs
+
+
+def _pair_cost_fields(cost: dict) -> dict:
+    entry = cost.get("entry") or {}
+    try:
+        filled = float(entry.get("filled_usdt") or cost.get("notional") or 0)
+    except (TypeError, ValueError):
+        return {}
+    if filled <= 0:
+        return {}
+    out: dict = {}
+    for usdt_key, bp_key in (("fees_usdt", "fees_bp"), ("funding_usdt", "funding_bp")):
+        try:
+            out[bp_key] = round(float(cost[usdt_key]) / filled * 1e4, 4)
+        except (KeyError, TypeError, ValueError):
+            continue
+    slip_usdt = 0.0
+    exit_leg = cost.get("exit") or {}
+    saw_slippage = False
+    for leg in (entry, exit_leg):
+        sbp = leg.get("slippage_bp")
+        if sbp is None:
+            continue
+        saw_slippage = True
+        try:
+            leg_fill = float(leg.get("filled_usdt") or filled)
+            slip_usdt += abs(float(sbp)) / 1e4 * leg_fill
+        except (TypeError, ValueError):
+            continue
+    if saw_slippage:
+        out["slippage_bp"] = round(slip_usdt / filled * 1e4, 4)
+    if cost.get("risk_control_violation") is True:
+        out["risk_control_violation"] = True
+    return out
 
 
 def _baselines(cost: dict, exit_derived: dict, opened: datetime, closed_at: datetime, rates=None) -> dict:

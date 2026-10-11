@@ -123,9 +123,9 @@ export function EventFeed({
                   <span className="text-[11px] font-semibold text-ink-soft">
                     {e.source.name}
                   </span>
-                  {e.category === "MARKET" ? null : (
+                  {e.evidenceCompleteness != null && e.evidenceCompleteness > 0 ? (
                     <CompletenessMeter value={e.evidenceCompleteness} className="ml-auto" />
-                  )}
+                  ) : null}
                 </div>
               </button>
             </li>

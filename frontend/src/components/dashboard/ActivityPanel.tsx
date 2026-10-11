@@ -19,8 +19,10 @@ export function ActivityPanel({ activity }: { activity: ActivityRecord[] }) {
   const selectEvent = useDashboardStore((s) => s.selectEvent);
 
   const fills = activity.filter((a) => a.execution === "FILLED");
-  const refusals = activity.filter((a) => a.execution === "REFUSED");
   const preModel = activity.filter((a) => a.governorCalled === false);
+  const refusals = activity.filter(
+    (a) => a.governorCalled !== false && (a.execution === "REFUSED" || a.riskOutcome === "REFUSED")
+  );
   const combinedCosts = useMemo(
     () => [
       { label: "Exchange fees", usd: 0 },
@@ -42,16 +44,20 @@ export function ActivityPanel({ activity }: { activity: ActivityRecord[] }) {
             {preModel.length === 1 ? "cycle" : "cycles"}. A pre-model cycle is not a governor block. Zero fills are not a profit result. Costs stay
             INSUFFICIENT_DATA until a graded fill is stored.
           </p>
-          <dl className="tnum mt-4 grid grid-cols-3 gap-3 text-center">
+          <dl className="tnum mt-4 grid grid-cols-2 gap-3 text-center @min-[28rem]:grid-cols-4">
             <div className="rounded-2xl border-2 border-line bg-paper px-3 py-3">
               <dt className="text-[10px] font-bold uppercase text-ink-soft">Fills</dt>
               <dd className="mt-1 font-display text-2xl text-forest-deep">{fills.length}</dd>
             </div>
             <div className="rounded-2xl border-2 border-line bg-paper px-3 py-3">
-              <dt className="text-[10px] font-bold uppercase text-ink-soft">Order refusals</dt>
+              <dt className="text-[10px] font-bold uppercase text-ink-soft">Risk refusals</dt>
               <dd className="mt-1 font-display text-2xl text-risk">
                 {refusals.length}
               </dd>
+            </div>
+            <div className="rounded-2xl border-2 border-line bg-paper px-3 py-3">
+              <dt className="text-[10px] font-bold uppercase text-ink-soft">Pre-model</dt>
+              <dd className="mt-1 font-display text-2xl text-ink">{preModel.length}</dd>
             </div>
             <div className="rounded-2xl border-2 border-forest bg-forest-mist px-3 py-3">
               <dt className="text-[10px] font-bold uppercase text-forest-deep">Costs</dt>

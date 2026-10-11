@@ -54,7 +54,10 @@ export function OverviewPanel({
   const selectEvent = useDashboardStore((s) => s.selectEvent);
 
   const fills = activity.filter((a) => a.execution === "FILLED");
-  const blocks = activity.filter((a) => a.riskOutcome === "REFUSED");
+  const preModelCycles = activity.filter((a) => a.governorCalled === false);
+  const riskRefusals = activity.filter(
+    (a) => a.governorCalled !== false && (a.execution === "REFUSED" || a.riskOutcome === "REFUSED")
+  );
 
   const recentActivity = activity.slice(0, 5);
 
@@ -99,14 +102,17 @@ export function OverviewPanel({
         />
         <SummaryCard
           icon={ShieldCheck}
-          label={cycle?.reason === "no_qualifying_event" ? "Pre-model refusal" : "Risk blocks"}
-          value={String(cycle?.refusalCount ?? blocks.length)}
-          hint={cycle?.stale ? "last cycle is older than 2 hours" : cycle?.reason || "refusals as designed"}
+          label="Risk refusals · pre-model"
+          value={`${riskRefusals.length} · ${preModelCycles.length}`}
+          hint={
+            cycle?.stale
+              ? "last cycle is older than 2 hours"
+              : `${preModelCycles.length} pre-model ${preModelCycles.length === 1 ? "cycle" : "cycles"} (not governor blocks)`
+          }
           detail={
             <p className="text-[11px] font-semibold text-ink-soft">
-              {cycle?.reason === "no_qualifying_event"
-                ? "The model and the governor were not called. This is not a risk-block."
-                : "Missing evidence, stale data, or unsupported claims"}
+              Risk refusals: {riskRefusals.length}. Pre-model cycles: {preModelCycles.length}. Latest reason:{" "}
+              {cycle?.reason || "none"}.
             </p>
           }
         />

@@ -86,8 +86,8 @@ export interface MarketEvent {
   /** ISO 8601 timestamp of when the event was observed. */
   occurredAt: string;
   source: SourceIdentity;
-  /** 0..1 — how complete the current evidence bundle is. */
-  evidenceCompleteness: number;
+  /** 0..1 when scored; null when no completeness score exists (e.g. a book snapshot). */
+  evidenceCompleteness: number | null;
   decisionState: DecisionState;
   status: EventStatus;
 }

@@ -119,10 +119,17 @@ export function CompletenessMeter({
   threshold = 0.9,
   className,
 }: {
-  value: number;
+  value: number | null | undefined;
   threshold?: number;
   className?: string;
 }) {
+  if (value == null || !Number.isFinite(value) || value <= 0) {
+    return (
+      <span className={cn("text-[11px] font-bold text-ink-soft", className)}>
+        No completeness score
+      </span>
+    );
+  }
   const pct = Math.round(value * 100);
   const below = value < threshold;
   return (

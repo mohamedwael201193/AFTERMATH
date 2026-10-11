@@ -41,6 +41,9 @@ export const RECEIPT_VERIFICATION_LABELS: Record<
 
 export async function explainReceipt(receipt: SignedReceipt): Promise<string> {
   if (receipt.verification === "UNCONFIRMED") {
+    if (receipt.timestampAuthority === "Not anchored") {
+      return "The production public key verified the signature. No OpenTimestamps anchor was submitted.";
+    }
     return "The production public key verified the signature. The OpenTimestamps anchor is still pending, so this is not a confirmed external timestamp.";
   }
   if (receipt.verification === "SIGNATURE_VERIFIED") {
