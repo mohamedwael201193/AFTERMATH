@@ -151,7 +151,7 @@ def run_paper_cycle(settings, store, *, fetch=None, signing_path: str = "", even
         except Exception as exc:
             errors.append(getattr(exc, "message", None) or "sec_fetch_failed")
     observations = list(observations) + list(filings)
-    advance_positions(store, observations, now)
+    advance_positions(store, observations, now, signing_path=signing_path)
     links = []
     loaded = []
     if not observations:

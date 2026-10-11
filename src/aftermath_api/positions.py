@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from .execution_context import PAPER_EQUITY, derive_execution
 from .paper import paper_fill
@@ -76,7 +78,7 @@ def lifecycle_intact(store, fill_id: str) -> bool:
     return last.get("status") == current.get("status") and last.get("cost_json") == current.get("cost_json")
 
 
-def advance_positions(store, observations: list[dict], now: datetime) -> None:
+def advance_positions(store, observations: list[dict], now: datetime, signing_path: str = "") -> None:
     books = [row for row in observations if row.get("event_type") == "book"]
     for fill in list(store.list_fills()):
         cost = dict(fill.get("cost_json") or {})
@@ -84,18 +86,37 @@ def advance_positions(store, observations: list[dict], now: datetime) -> None:
             opened = enter_later(cost, books)
             if opened.get("error"):
                 if _pending_expired(fill, now):
-                    store.update_fill(fill["id"], status="EXPIRED", cost_json={
+                    expired = {
                         **cost,
                         "expiry_reason": opened["error"],
                         "expired_at": now.isoformat(),
-                    })
+                    }
+                    store.update_fill(fill["id"], status="EXPIRED", cost_json=expired)
+                    _sign_fill(store, signing_path, fill["id"], "EXPIRED", expired)
                 continue
             store.update_fill(fill["id"], status=opened["status"], cost_json=opened["cost_json"])
+            _sign_fill(store, signing_path, fill["id"], opened["status"], opened["cost_json"])
         elif fill.get("status") == "PAPER_FILLED" and cost.get("outcome_bp") is None:
             closed = close_later(cost, books, now)
             if closed.get("error"):
                 continue
             store.update_fill(fill["id"], status="CLOSED", cost_json=closed["cost_json"])
+            _sign_fill(store, signing_path, fill["id"], "CLOSED", closed["cost_json"])
+
+
+def _sign_fill(store, signing_path: str, fill_id: str, status: str, cost: dict) -> None:
+    """Append one signed ledger line for a fill transition. A missing key leaves the row unsigned."""
+    if not signing_path or not Path(signing_path).is_file():
+        return
+    from .receipts import issue_receipt
+
+    encoded = json.dumps(cost, sort_keys=True, default=str, separators=(",", ":")).encode()
+    issue_receipt(store, Path(signing_path), {
+        "kind": "fill_transition",
+        "fill_id": fill_id,
+        "status": status,
+        "cost_sha256": hashlib.sha256(encoded).hexdigest(),
+    })
 
 
 def _pending_expired(fill: dict, now: datetime) -> bool:

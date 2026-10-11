@@ -304,7 +304,7 @@ def test_isolated_lifecycle_approve_pending_fill_close_receipt_and_tamper(tmp_pa
     assert derived["error"] is None
     assert govern({"action": "LONG", "symbol": "NVDAUSDT", "size_frac": 0.05, "horizon_hours": 24, "confidence": 0.8}, derived["context"])["verdict"] == "APPROVED"
 
-    advance_positions(store, [entry_book], datetime.fromisoformat(opened_at))
+    advance_positions(store, [entry_book], datetime.fromisoformat(opened_at), signing_path=str(private))
     opened = store.fill_for_key(fill_key)
     assert opened["status"] == "PAPER_FILLED"
     assert opened["cost_json"]["entry_book_hash"] == "entry-book"
@@ -314,7 +314,7 @@ def test_isolated_lifecycle_approve_pending_fill_close_receipt_and_tamper(tmp_pa
         opened["id"],
         cost_json={**opened["cost_json"], "funding_rates": [0.0001, 0.0001, 0.0001]},
     )
-    advance_positions(store, [exit_book], datetime.fromisoformat(exit_at))
+    advance_positions(store, [exit_book], datetime.fromisoformat(exit_at), signing_path=str(private))
     closed = store.fill_for_key(fill_key)
     assert closed["status"] == "CLOSED"
     assert closed["cost_json"]["funding_source"] == "venue_funding"
@@ -325,7 +325,13 @@ def test_isolated_lifecycle_approve_pending_fill_close_receipt_and_tamper(tmp_pa
     receipt = store.receipt_for_decision(approved["decision_id"])
     assert receipt is not None
     assert verify_line(public, receipt["line"]) is True
+    transitions = [line for line in store.list_ledger() if (line.get("body") or {}).get("kind") == "fill_transition"]
+    assert [line["body"]["status"] for line in transitions] == ["PAPER_FILLED", "CLOSED"]
+    assert all(verify_line(public, line) for line in transitions)
     assert chain_intact(public, store.list_ledger())
     tampered = {**receipt["line"], "body": {**receipt["line"]["body"], "status": "CLOSED"}}
     assert verify_line(public, tampered) is False
+    close_line = transitions[-1]
+    tampered_close = {**close_line, "body": {**close_line["body"], "status": "PAPER_FILLED"}}
+    assert verify_line(public, tampered_close) is False
     assert production_ledger.ledger == []
